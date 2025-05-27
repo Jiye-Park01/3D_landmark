@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from torch.utils.data import Dataset
+import os
 
 
 def load_face_data(data):
@@ -12,32 +13,36 @@ def load_face_data(data):
 
 
 class FaceLandmarkData(Dataset):
-    def __init__(self, partition='trainval', data='BU-3DFE'):
-        if data == 'BU-3DFE' or data == 'FaceScape':
-            self.data, self.landmark, self.seg = load_face_data(data)
-        if data == 'FRGC':
-            self.data, self.landmark, self.seg = load_face_data(data)
+    def __init__(self, data_dir, partition='trainval'):
+        self.data_dir = data_dir
         self.partition = partition
-        self.DATA = data
-
+        
+        # npy 파일들의 리스트를 가져옴
+        self.shape_files = sorted([f for f in os.listdir(os.path.join(data_dir, 'shapes')) if f.endswith('.npy')])
+        self.landmark_files = sorted([f for f in os.listdir(os.path.join(data_dir, 'landmarks')) if f.endswith('.npy')])
+        
+        # 파일 개수 확인
+        assert len(self.shape_files) == len(self.landmark_files), "Number of shape files and landmark files must match"
+        
     def __getitem__(self, item):
-        if self.DATA == 'BU-3DFE' or self.DATA == 'FaceScape':
-            data_T, landmark_T, seg_T = torch.Tensor(self.data), torch.Tensor(self.landmark), torch.Tensor(self.seg)
-            face = data_T[item]
-        if self.DATA == 'FRGC':
-            data_T, landmark_T, seg_T = torch.Tensor(self.data), torch.Tensor(self.landmark), torch.Tensor(self.seg)
-            face = data_T[item]
-        landmark = landmark_T[item]
-        heatmap = seg_T[item]
+        # 각 파일에서 데이터 로드
+        shape = np.load(os.path.join(self.data_dir, 'shapes', self.shape_files[item]))
+        landmark = np.load(os.path.join(self.data_dir, 'landmarks', self.landmark_files[item]))
+        
+        # 텐서로 변환
+        shape = torch.Tensor(shape)  # shape: [N, 3] where N is variable
+        landmark = torch.Tensor(landmark)  # landmark: [48, 3] (selected landmarks)
+        
         if self.partition == 'trainval':
-            indices = list(range(face.size()[0]))
+            # 포인트 순서 섞기
+            indices = list(range(shape.size()[0]))
             np.random.shuffle(indices)
-            face = face[indices]
-            heatmap = heatmap[indices]
-        return face, landmark, heatmap
+            shape = shape[indices]
+        
+        return shape, landmark, None  # heatmap은 모델이 생성
 
     def __len__(self):
-        return np.array(self.data).shape[0]
+        return len(self.shape_files)
 
 
 

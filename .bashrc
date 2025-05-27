@@ -1,0 +1,6 @@
+export PATH="$PATH:/c/Users/DS/miniconda3:/c/Users/DS/miniconda3/Scripts"
+export PATH="$PATH:/c/Users/DS/miniconda3:/c/Users/DS/miniconda3/Scripts"
+export PATH="$PATH:/c/Users/DS/miniconda3:/c/Users/DS/miniconda3/Scripts"
+export PATH="$PATH:/c/Users/DS/miniconda3:/c/Users/DS/miniconda3/Scripts"
+export PATH="$PATH:/c/Users/DS/miniconda3:/c/Users/DS/miniconda3/Scripts"
+export PATH="$PATH:/c/Users/DS/miniconda3:/c/Users/DS/miniconda3/Scripts"
