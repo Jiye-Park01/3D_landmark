@@ -28,24 +28,26 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def train(args):
     writer = SummaryWriter('runs/3D_face_alignment')
-    if args.need_resample:
-        main_sample(args.num_points, args.seed, args.sigma, args.sample_way, args.dataset)
+    
     # Dataset Random partition
-    FaceLandmark = FaceLandmarkData(partition='trainval', data=args.dataset)
+    FaceLandmark = FaceLandmarkData(data_dir=args.data_dir, partition='trainval')
     train_size = int(len(FaceLandmark) * 0.7)
     test_size = len(FaceLandmark) - train_size
     torch.manual_seed(args.dataset_seed)
-    # Prepare the dateset and dataloader 
+    
+    # Prepare the dataset and dataloader 
     train_dataset, test_dataset = torch.utils.data.random_split(FaceLandmark, [train_size, test_size])
-    train_loader = DataLoader(train_dataset, num_workers=1, batch_size=args.batch_size, shuffle=True, drop_last=True)
-    test_loader = DataLoader(test_dataset, num_workers=1, batch_size=args.test_batch_size, shuffle=True, drop_last=True)
+    # 배치 크기를 1로 설정하고 collate_fn을 사용하여 가변 크기 배치 처리
+    train_loader = DataLoader(train_dataset, num_workers=1, batch_size=1, shuffle=True)
+    test_loader = DataLoader(test_dataset, num_workers=1, batch_size=1, shuffle=True)
+    
     # data argument
     ScaleAndTranslate = PointcloudScaleAndTranslate()
     MOMENTUM_ORIGINAL = 0.1
     MOMENTUM_DECCAY = 0.5
 
     # select a model to train
-    model = PAConv(args, 8).to(device)   # 68 in FaceScape; 8 in BU-3DFE and FRGC
+    model = PAConv(args, 48).to(device)   # 48 landmarks (68 - 12 excluded landmarks)
     model.apply(weight_init)
     model = nn.DataParallel(model)
 
@@ -69,27 +71,31 @@ def train(args):
     for epoch in range(args.epochs):
         iters = 0
         model.train()
-        for point, landmark, seg in train_loader:
-            seg = torch.where(torch.isnan(seg), torch.full_like(seg, 0), seg)
+        for point, landmark, _ in train_loader:  # seg는 None이므로 _로 받음
             iters = iters + 1
             if args.no_cuda == False:
-                point = point.to(device)                   # point: (Batch * num_point * num_dim)
-                landmark = landmark.to(device)             # landmark : (Batch * landmark * num_dim)
-                seg = seg.to(device)                       # seg: (Batch * point_num * landmark)
-            point_normal = normalize_data(point)           # point_normal : (Batch * num_point * num_dim)
+                point = point.to(device)                   # point: (1, N, 3) where N is variable
+                landmark = landmark.to(device)             # landmark: (1, 48, 3)
+            
+            point_normal = normalize_data(point)           # point_normal: (1, N, 3)
             point_normal = ScaleAndTranslate(point_normal)
             opt.zero_grad()
-            point_normal = point_normal.permute(0, 2, 1)   # point : (batch * num_dim * num_point)
+            point_normal = point_normal.permute(0, 2, 1)   # point: (1, 3, N)
             pred_heatmap = model(point_normal)
 
-            # Compute the loss fucntion 
-            loss = criterion(pred_heatmap, seg.permute(0, 2, 1).contiguous())
+            # Compute the loss function 
+            # 히트맵 생성 및 손실 계산
+            heatmap = generate_heatmap(point_normal, landmark, sigma=args.sigma)
+            loss = criterion(pred_heatmap, heatmap)
             loss.backward()
             loss_epoch = loss_epoch + loss
             opt.step()
             print('Epoch: [%d / %d] Train_Iter: [%d /%d] loss: %.4f' % (epoch + 1, args.epochs, iters, len(train_loader), loss))
+        
         if (epoch + 1) % 5 == 0:
+            os.makedirs('./checkpoints/%s/%s/models/' % (args.exp_name, args.dataset), exist_ok=True)
             torch.save(model.state_dict(), './checkpoints/%s/%s/models/model_epoch_%d.t7' % (args.exp_name, args.dataset, epoch+1))
+        
         if args.scheduler == 'cos':
             scheduler.step()
         elif args.scheduler == 'step':
@@ -100,6 +106,21 @@ def train(args):
                     param_group['lr'] = 1e-5
         writer.add_scalar('3D_Face_Alignment_loss', loss_epoch / ((epoch + 1) * len(train_loader)), epoch + 1)
 
+def generate_heatmap(points, landmarks, sigma=10):
+    """히트맵 생성 함수"""
+    B, C, N = points.shape
+    heatmap = torch.zeros(B, landmarks.shape[1], N).to(points.device)
+    
+    for b in range(B):
+        for l in range(landmarks.shape[1]):
+            landmark = landmarks[b, l]  # (3,)
+            # 각 포인트와 랜드마크 사이의 거리 계산
+            diff = points[b].permute(1, 0) - landmark  # (N, 3)
+            dist = torch.sum(diff * diff, dim=1)  # (N,)
+            # 가우시안 히트맵 생성
+            heatmap[b, l] = torch.exp(-dist / (2 * sigma * sigma))
+    
+    return heatmap
 
 if __name__ == "__main__":
     # Training settings
