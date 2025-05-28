@@ -9,19 +9,21 @@ import os
 import torch
 
 
-def _init_():
+def _init_(args):
     if not os.path.exists('checkpoints'):
         os.makedirs('checkpoints')
     if not os.path.exists('checkpoints/'+args.exp_name):
         os.makedirs('checkpoints/'+args.exp_name)
     if not os.path.exists('checkpoints/'+args.exp_name+'/'+'models'):
         os.makedirs('checkpoints/'+args.exp_name+'/'+'models')
-    os.system('cp My_main.py checkpoints'+'/'+args.exp_name+'/'+'My_main.py.backup')
-    os.system('cp My_model.py checkpoints' + '/' + args.exp_name + '/' + 'My_model.py.backup')
-    os.system('cp My_util.py checkpoints' + '/' + args.exp_name + '/' + 'My_util.py.backup')
-    os.system('cp My_data.py checkpoints' + '/' + args.exp_name + '/' + 'My_data.py.backup')
-    os.system('cp My_loss.py checkpoints' + '/' + args.exp_name + '/' + 'My_loss.py.backup')
-    os.system('cp My_args.py checkpoints' + '/' + args.exp_name + '/' + 'My_args.py.backup')
+    
+    # 현재 디렉토리에 백업 파일 생성
+    os.system('cp train.py checkpoints/'+args.exp_name+'/train.py.backup')
+    os.system('cp PAConv_model.py checkpoints/'+args.exp_name+'/PAConv_model.py.backup')
+    os.system('cp util.py checkpoints/'+args.exp_name+'/util.py.backup')
+    os.system('cp dataset.py checkpoints/'+args.exp_name+'/dataset.py.backup')
+    os.system('cp loss.py checkpoints/'+args.exp_name+'/loss.py.backup')
+    os.system('cp My_args.py checkpoints/'+args.exp_name+'/My_args.py.backup')
 
 
 def weight_init(m):

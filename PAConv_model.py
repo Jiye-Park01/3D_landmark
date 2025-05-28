@@ -3,8 +3,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from My_args import *
-from PAConv.util.PAConv_util import knn, get_graph_feature, get_scorenet_input, feat_trans_dgcnn, ScoreNet, Attention_Layer
-from PAConv.cuda_lib.functional import assign_score_withk as assemble_dgcnn
+# from PAConv.util.PAConv_util import knn, get_graph_feature, get_scorenet_input, feat_trans_dgcnn, ScoreNet, Attention_Layer
+from PAConv.part_seg.util.PAConv_util import knn, get_scorenet_input, feat_trans_dgcnn, ScoreNet
+
+# Import get_graph_feature from scene_seg/util/paconv_util.py (where you found it before)
+from PAConv.scene_seg.util.paconv_util import get_graph_feature
+from PAConv.obj_cls.cuda_lib.functional import assign_score_withk as assemble_dgcnn
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 '''
