@@ -30,19 +30,27 @@ def load_model(model_path, device):
 
 def predict_landmarks(model, points, device):
     with torch.no_grad():
-        points = points.unsqueeze(0).to(device)  # Add batch dimension
-        point_normal = normalize_data(points)
-        point_normal = point_normal.permute(0, 2, 1)
-        pred_heatmap = model(point_normal)
+        points = points.unsqueeze(0).to(device)  # Add batch dimension (B, N, 3)
+        # normalize_data(points)  # 정규화 제거
+
+        # 모델은 (B, 3, N) 형태를 기대하므로 차원 변환
+        points_permuted = points.permute(0, 2, 1)
         
-        # Get landmark positions from heatmap
+        pred_heatmap = model(points_permuted)
+        
+        # 히트맵에서 랜드마크 위치 추출 (원본 points 사용)
+        # get_predicted_landmarks_from_heatmap 함수 사용을 권장하지만, 기존 로직 유지
         B, L, N = pred_heatmap.shape
         pred_landmarks = torch.zeros(B, L, 3).to(device)
-        for b in range(B):
-            for l in range(L):
-                max_idx = torch.argmax(pred_heatmap[b, l])
-                pred_landmarks[b, l] = point_normal[b, :, max_idx]
+        points_np = points[0].cpu().numpy() # 원본 points numpy 배열
+        pred_heatmap_np = pred_heatmap[0].cpu().numpy() # 예측 히트맵 numpy 배열
         
+        for l in range(L):
+            # Find the index of the point with the maximum heatmap value for landmark l
+            max_idx = np.argmax(pred_heatmap_np[l])
+            # Get the 3D coordinate of this point from original points
+            pred_landmarks[0, l] = torch.from_numpy(points_np[max_idx, :]).to(device)
+
         return pred_landmarks[0].cpu().numpy(), pred_heatmap[0].cpu().numpy()
 
 def visualize_results(points, true_landmarks, pred_landmarks, save_path=None):
@@ -108,7 +116,7 @@ def main():
     print(f"Using device: {device}")
     
     # 모델 로드
-    model_path = './checkpoints/Face alignment with PAConv/custom/models/best_model.t7'
+    model_path = './checkpoints/Face alignment with PAConv/custom_2/models/best_model.t7'
     if not os.path.exists(model_path):
         print(f"Error: Model file not found at {model_path}")
         return
