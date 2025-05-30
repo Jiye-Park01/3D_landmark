@@ -14,13 +14,22 @@ from My_args import *
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 '''data normalization'''
-def normalize_data(batch_data):
+def normalize_data(batch_data, landmarks_data=None):
     # batch_data : batch_size * num_points * num_dims
+    # landmarks_data : batch_size * num_landmarks * num_dims (optional)
     B, N, C = batch_data.shape
     centroid = torch.mean(batch_data, axis=1)
     batch_data = batch_data - centroid.unsqueeze(1).repeat(1, N, 1)
     m = torch.max(torch.sqrt(torch.sum(batch_data ** 2, axis=2)),axis=1)[0]
     batch_data = batch_data / m.view(-1, 1, 1)
+
+    if landmarks_data is not None:
+        # Apply the same transformation to landmarks
+        L = landmarks_data.shape[1]
+        landmarks_data = landmarks_data - centroid.unsqueeze(1).repeat(1, L, 1)
+        landmarks_data = landmarks_data / m.view(-1, 1, 1)
+        return batch_data, landmarks_data
+
     return batch_data
 
 

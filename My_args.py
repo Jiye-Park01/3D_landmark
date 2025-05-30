@@ -29,7 +29,7 @@ parser.add_argument('--dropout', type=float, default=0.5, help='dropout rate')
 # optimizor args
 parser.add_argument('--loss', type=str, default='adaptive_wing', metavar='N', choices=['mse', 'adaptive_wing'], help='loss function to use')
 parser.add_argument('--use_sgd', type=bool, default=False, help='Use SGD')
-parser.add_argument('--lr', type=float, default=0.003, metavar='LR', help='learning rate (default: 0.001, 0.1 if using sgd)')
+parser.add_argument('--lr', type=float, default=0.00005, metavar='LR', help='learning rate (default: 0.001, 0.1 if using sgd)')
 parser.add_argument('--momentum', type=float, default=0.9, metavar='M', help='SGD momentum (default: 0.9)')
 parser.add_argument('--scheduler', type=str, default='step', metavar='N', choices=['cos', 'step'], help='Scheduler to use, [cos, step]')
 parser.add_argument('--weight_decay', type=float, default=0, metavar='WD', help='the weight decay of optimizor')
@@ -46,4 +46,8 @@ parser.add_argument('--k', type=int, default=30, metavar='N', help='Num of neare
 parser.add_argument('--calc_scores', type=str, default='softmax', metavar='cs', help='The way to calculate score')
 parser.add_argument('--hidden', type=list, default=[[16], [16], [16], [16]], help='the hidden layers of ScoreNet')
 parser.add_argument('--num_matrices', type=list, default=[8, 8, 8, 8], help='the number of weight banks')
+
+# Add num_points and num_landmarks arguments
+parser.add_argument('--num_points', type=int, default=2048, help='Number of points to sample from each shape')
+parser.add_argument('--num_landmarks', type=int, default=56, help='Number of landmarks')
 
