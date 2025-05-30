@@ -21,7 +21,6 @@ import argparse
 import random
 from datetime import datetime
 import shutil
-import matplotlib.pyplot as plt
 
 from init import _init_, weight_init  # _init_ 함수를 명시적으로 import
 from My_args import *
@@ -30,12 +29,28 @@ from dataset import FaceLandmarkData, custom_collate_fn
 from loss import AdaptiveWingLoss
 from util import main_sample
 from PAConv_model import PAConv
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def custom_collate_fn(batch):
-    points = torch.stack([item[0] for item in batch])
+    # Find the maximum number of points in the batch
+    max_points = max(item[0].size(0) for item in batch)
+    
+    # Pad all point clouds to the maximum size
+    padded_points = []
+    for points, landmarks, _ in batch:
+        # Create a padded tensor filled with zeros
+        padded = torch.zeros(max_points, points.size(1))
+        # Copy the actual points
+        padded[:points.size(0)] = points
+        padded_points.append(padded)
+    
+    # Stack the padded tensors
+    points = torch.stack(padded_points)
     landmarks = torch.stack([item[1] for item in batch])
+    
     return points, landmarks, None
 
 def generate_heatmap(points, landmarks, sigma=2.0):
@@ -57,19 +72,13 @@ def generate_heatmap(points, landmarks, sigma=2.0):
     landmarks = landmarks.unsqueeze(2)
     
     # Calculate squared Euclidean distance (B, L, N)
+    # dist^2 = (px - lx)^2 + (py - ly)^2 + (pz - lz)^2
     dist_sq = torch.sum((points - landmarks)**2, dim=-1)
     
     # Calculate heatmap using Gaussian kernel
+    # heatmap = exp(-dist_sq / (2 * sigma^2))
     heatmap = torch.exp(-dist_sq / (2 * sigma**2))
     
-    # Optional: Normalize heatmap to [0, 1] range for better visualization, but not for loss calculation
-    # min_val = torch.min(heatmap, dim=2, keepdim=True)[0]
-    # max_val = torch.max(heatmap, dim=2, keepdim=True)[0]
-    # if max_val - min_val > 1e-6:
-    #     heatmap = (heatmap - min_val) / (max_val - min_val)
-    # else:
-    #     heatmap = torch.zeros_like(heatmap)
-
     return heatmap
 
 def get_predicted_landmarks_from_heatmap(points, pred_heatmap):
@@ -92,204 +101,93 @@ def get_predicted_landmarks_from_heatmap(points, pred_heatmap):
             pred_landmarks[b, l] = points[b, max_idx, :]
     return pred_landmarks
 
-def evaluate(model, test_loader, criterion, device):
+def evaluate(model, test_loader, criterion, device, epoch, args):
     model.eval()
     total_loss = 0
     total_landmark_error = 0
+    num_batches = 0
     
     with torch.no_grad():
-        for data in test_loader:
+        for i, data in enumerate(test_loader):
             points, landmark, _ = data
             points, landmark = points.to(device), landmark.to(device)
             
-            # 정규화된 포인트와 랜드마크를 함께 얻음
-            points_normal, landmark_normal = normalize_data(points, landmark)
-            
-            # 모델 입력 형태에 맞게 차원 변경 (B, 3, N)
-            points_model_input = points_normal.permute(0, 2, 1)
-            
             # 모델 예측 (히트맵)
-            pred_heatmap = model(points_model_input)
+            # points는 (B, N, 3) 형태이므로, (B, 3, N)으로 변환
+            points = points.permute(0, 2, 1)  # (B, N, 3) -> (B, 3, N)
             
-            # 정답 히트맵 생성 (정규화된 랜드마크 사용)
-            # generate_heatmap은 (B, N, 3) 형태의 포인트를 기대합니다.
-            true_heatmap = generate_heatmap(points_normal, landmark_normal, sigma=2.0)
+            # PAConv 모델은 입력을 (B, 3, N) 형태로 기대함
+            pred_heatmap = model(points)
+            
+            # 정답 히트맵 생성 (points를 다시 (B, N, 3)으로 변환)
+            true_heatmap = generate_heatmap(points.permute(0, 2, 1), landmark, sigma=2.0)
             
             # 히트맵 손실 계산
             heatmap_loss = criterion(pred_heatmap, true_heatmap)
             total_loss += heatmap_loss.item()
 
-            # 예측 랜드마크 위치 추출
-            # get_predicted_landmarks_from_heatmap는 (B, N, 3) 형태의 포인트를 기대합니다.
-            pred_landmarks = get_predicted_landmarks_from_heatmap(points_normal, pred_heatmap)
+            # 예측 랜드마크 위치 추출 (points를 다시 (B, N, 3)으로 변환)
+            pred_landmarks = get_predicted_landmarks_from_heatmap(points.permute(0, 2, 1), pred_heatmap)
 
             # 랜드마크 오차 계산 (평균 거리)
-            landmark_error = torch.norm(pred_landmarks - landmark_normal, dim=2).mean()
+            landmark_error = torch.norm(pred_landmarks - landmark, dim=2).mean()
             total_landmark_error += landmark_error.item()
+            num_batches += 1
+
+            if i == 0 and args.visualize and epoch % args.vis_interval == 0:
+                # 시각화 디렉토리 생성
+                vis_dir = os.path.join('./visualizations', args.exp_name, args.dataset)
+                os.makedirs(vis_dir, exist_ok=True)
+                
+                # 첫 번째 샘플만 선택
+                points_np = points[0].permute(1, 0).cpu().numpy()
+                true_landmarks_np = landmark[0].cpu().numpy()
+                pred_landmarks_np = pred_landmarks[0].cpu().numpy()
+                
+                # 3D 시각화
+                fig = plt.figure(figsize=(10, 10))
+                ax = fig.add_subplot(111, projection='3d')
+                
+                # 포인트 클라우드 (회색)
+                ax.scatter(points_np[:, 0], points_np[:, 1], points_np[:, 2], 
+                        c='gray', s=1, alpha=0.1)
+                
+                # 실제 랜드마크 (빨간색)
+                ax.scatter(true_landmarks_np[:, 0], true_landmarks_np[:, 1], true_landmarks_np[:, 2],
+                        c='red', s=50, label='True Landmarks')
+                
+                # 예측 랜드마크 (파란색)
+                ax.scatter(pred_landmarks_np[:, 0], pred_landmarks_np[:, 1], pred_landmarks_np[:, 2],
+                        c='blue', s=50, label='Predicted Landmarks')
+                
+                # z축을 위에서 아래로 보이도록 설정
+                ax.view_init(elev=90, azim=0)
+                
+                # 이미지 저장
+                plt.savefig(os.path.join(vis_dir, f'prediction_epoch_{epoch+1}.png'))
+                plt.close()
     
-    avg_loss = total_loss / len(test_loader)
-    avg_landmark_error = total_landmark_error / len(test_loader)
+    avg_loss = total_loss / num_batches
+    avg_landmark_error = total_landmark_error / num_batches
     
     return avg_loss, avg_landmark_error
 
-def save_heatmap_as_obj(points, heatmap_values, landmark_idx, filename):
-    """
-    Saves point cloud with heatmap values as vertex colors to an OBJ file.
-    Args:
-        points: (N, 3) numpy array of point coordinates.
-        heatmap_values: (N,) numpy array of heatmap values for a specific landmark.
-        landmark_idx: Index of the landmark (for filename).
-        filename: Path to save the OBJ file.
-    """
-    num_points = points.shape[0]
-
-    # Normalize heatmap values to [0, 1] for colormap mapping
-    min_val = np.min(heatmap_values)
-    max_val = np.max(heatmap_values)
-    if max_val - min_val > 1e-6:
-        normalized_heatmap = (heatmap_values - min_val) / (max_val - min_val)
-    else:
-        normalized_heatmap = np.zeros_like(heatmap_values)
-
-    # Map normalized heatmap values to colors (simple DarkRed to Yellow mapping)
-    colors = np.zeros((num_points, 3))
-    # Interpolate from DarkRed (0.2, 0, 0) to Yellow (1, 1, 0)
-    colors[:, 0] = 0.2 + 0.8 * normalized_heatmap # R
-    colors[:, 1] = normalized_heatmap # G
-    colors[:, 2] = 0 # B
-
-    with open(filename, 'w') as f:
-        # Write vertices with colors
-        for i in range(num_points):
-            f.write(f'v {points[i, 0]:.6f} {points[i, 1]:.6f} {points[i, 2]:.6f} {colors[i, 0]:.6f} {colors[i, 1]:.6f} {colors[i, 2]:.6f}\n')
-
-    print(f"Heatmap for Landmark {landmark_idx} saved to {filename}")
-
-def visualize_heatmap(points, landmarks, heatmap, save_path=None):
-    """
-    Visualize points, landmarks and heatmap in 3D
-    Args:
-        points: (N, 3) numpy array of point cloud
-        landmarks: (L, 3) numpy array of landmark positions
-        heatmap: (L, N) numpy array of heatmap values
-        save_path: path to save the visualization (optional)
-    """
-    fig = plt.figure(figsize=(18, 6))
-
-    # Plot 1: Original points and landmarks
-    ax1 = fig.add_subplot(131, projection='3d')
-    ax1.scatter(points[:, 0], points[:, 1], points[:, 2], c='gray', s=1, alpha=0.5)
-    ax1.scatter(landmarks[:, 0], landmarks[:, 1], landmarks[:, 2], c='red', s=50)
-    ax1.set_title('Points and Landmarks')
-    ax1.set_xlabel('X'); ax1.set_ylabel('Y'); ax1.set_zlabel('Z')
-    ax1.view_init(elev=90, azim=-90) # Z-up, looking from the front-ish
-    ax1.set_box_aspect([np.ptp(points[:,0]), np.ptp(points[:,1]), np.ptp(points[:,2])]) # Equal aspect ratio
-
-    # Plot 2: Heatmap for first landmark (index 0)
-    ax2 = fig.add_subplot(132, projection='3d')
-    scatter = ax2.scatter(points[:, 0], points[:, 1], points[:, 2],
-                         c=heatmap[0], cmap='hot', s=1)
-    ax2.scatter(landmarks[0, 0], landmarks[0, 1], landmarks[0, 2],
-                c='red', s=100, marker='*')
-    ax2.set_title(f'Heatmap for Landmark 0')
-    ax2.set_xlabel('X'); ax2.set_ylabel('Y'); ax2.set_zlabel('Z')
-    ax2.view_init(elev=90, azim=-90) # Z-up, looking from the front-ish
-    ax2.set_box_aspect([np.ptp(points[:,0]), np.ptp(points[:,1]), np.ptp(points[:,2])]) # Equal aspect ratio
-    fig.colorbar(scatter, ax=ax2, pad=0.1)
-
-    # Plot 3: Heatmap for middle landmark
-    mid_idx = len(landmarks) // 2
-    ax3 = fig.add_subplot(133, projection='3d')
-    scatter = ax3.scatter(points[:, 0], points[:, 1], points[:, 2],
-                         c=heatmap[mid_idx], cmap='hot', s=1)
-    ax3.scatter(landmarks[mid_idx, 0], landmarks[mid_idx, 1], landmarks[mid_idx, 2],
-                c='red', s=100, marker='*')
-    ax3.set_title(f'Heatmap for Landmark {mid_idx}')
-    ax3.set_xlabel('X'); ax3.set_ylabel('Y'); ax3.set_zlabel('Z')
-    ax3.view_init(elev=90, azim=-90) # Z-up, looking from the front-ish
-    ax3.set_box_aspect([np.ptp(points[:,0]), np.ptp(points[:,1]), np.ptp(points[:,2])]) # Equal aspect ratio
-    fig.colorbar(scatter, ax=ax3, pad=0.1)
-
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path)
-        print(f"Visualization saved to {save_path}")
-    else:
-        plt.show()
-
-def visualize_heatmap_comparison(points_normal, landmark_normal, true_heatmap, pred_heatmap, epoch, save_dir='./visualizations/comparisons'):
-    """
-    Visualize and compare ground truth and predicted heatmaps for a sample.
-    Args:
-        points_normal: (B, N, 3) numpy array of normalized points.
-        landmark_normal: (B, L, 3) numpy array of normalized landmarks.
-        true_heatmap: (B, L, N) numpy array of ground truth heatmaps.
-        pred_heatmap: (B, L, N) numpy array of predicted heatmaps.
-        epoch: Current epoch number.
-        save_dir: Directory to save comparison images.
-    """
-    # Select the first sample in the batch (inputs are already numpy arrays)
-    points_sample = points_normal[0]
-    landmark_sample = landmark_normal[0]
-    true_heatmap_sample = true_heatmap[0]
-    pred_heatmap_sample = pred_heatmap[0]
-
-    # Create save directory if it doesn't exist
-    os.makedirs(save_dir, exist_ok=True)
-
-    # Select a few landmarks to visualize (e.g., first, middle, last)
-    landmark_indices_to_plot = [0, len(landmark_sample) // 2, len(landmark_sample) - 1]
-    
-    for lm_idx in landmark_indices_to_plot:
-        fig = plt.figure(figsize=(12, 6))
-
-        # Plot 1: Ground Truth Heatmap
-        ax1 = fig.add_subplot(121, projection='3d')
-        scatter1 = ax1.scatter(points_sample[:, 0], points_sample[:, 1], points_sample[:, 2],
-                               c=true_heatmap_sample[lm_idx], cmap='hot', s=1)
-        ax1.scatter(landmark_sample[lm_idx, 0], landmark_sample[lm_idx, 1], landmark_sample[lm_idx, 2],
-                    c='red', s=100, marker='*')
-        ax1.set_title(f'Epoch {epoch} - GT Heatmap for Landmark {lm_idx}')
-        ax1.set_xlabel('X'); ax1.set_ylabel('Y'); ax1.set_zlabel('Z')
-        ax1.view_init(elev=90, azim=-90) # Z-up, looking from the front-ish
-        ax1.set_box_aspect([np.ptp(points_sample[:,0]), np.ptp(points_sample[:,1]), np.ptp(points_sample[:,2])]) # Equal aspect ratio
-        fig.colorbar(scatter1, ax=ax1, pad=0.1)
-
-        # Plot 2: Predicted Heatmap
-        ax2 = fig.add_subplot(122, projection='3d')
-        scatter2 = ax2.scatter(points_sample[:, 0], points_sample[:, 1], points_sample[:, 2],
-                               c=pred_heatmap_sample[lm_idx], cmap='hot', s=1)
-        ax2.scatter(landmark_sample[lm_idx, 0], landmark_sample[lm_idx, 1], landmark_sample[lm_idx, 2],
-                    c='red', s=100, marker='*')
-        ax2.set_title(f'Epoch {epoch} - Pred Heatmap for Landmark {lm_idx}')
-        ax2.set_xlabel('X'); ax2.set_ylabel('Y'); ax2.set_zlabel('Z')
-        ax2.view_init(elev=90, azim=-90) # Z-up, looking from the front-ish
-        ax2.set_box_aspect([np.ptp(points_sample[:,0]), np.ptp(points_sample[:,1]), np.ptp(points_sample[:,2])]) # Equal aspect ratio
-        fig.colorbar(scatter2, ax=ax2, pad=0.1)
-
-        plt.tight_layout()
-        save_path = os.path.join(save_dir, f'epoch_{epoch}_landmark_{lm_idx}_comparison.png')
-        plt.savefig(save_path)
-        plt.close(fig) # Close the figure to free memory
-
-    print(f"Comparison visualizations saved for epoch {epoch} to {save_dir}")
-
 def train(args):
-    _init_(args) # Initialize folders
+    _init_(args)
+    patience = 10  # 10 에포크 동안 개선이 없으면 중단
+    min_delta = 0.0001  # 최소 개선 기준
+    counter = 0  # 개선이 없을 때마다 증가
+    best_metric = float('inf')  # 최고 성능 기록
     
     print(f"DEBUG: args.data_dir after _init_: {args.data_dir}")
-
-    # Convert absolute data_dir to relative if necessary
-    # The previous parsing seems to incorrectly make it absolute, force it to be relative to CWD
     args.data_dir = './dataset'
 
     print(f"Number of points to sample: {args.num_points}")
-    print(f"Number of landmarks: {args.num_landmarks}") # args.num_landmarks is 57
+    print(f"Number of landmarks: {args.num_landmarks}")
 
     train_dataset = FaceLandmarkData(data_dir=args.data_dir, num_points=args.num_points, partition='train')
     test_dataset = FaceLandmarkData(data_dir=args.data_dir, num_points=args.num_points, partition='val')
 
-    # Check dataset size
     print(f"Train dataset size: {len(train_dataset)}")
     print(f"Test dataset size: {len(test_dataset)}")
 
@@ -297,7 +195,6 @@ def train(args):
         print("Error: Dataset is empty after splitting. Check data_dir and file patterns.")
         return
         
-    # Use custom_collate_fn to handle None values from dataset (if any)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, drop_last=True, collate_fn=custom_collate_fn)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers, collate_fn=custom_collate_fn)
 
@@ -305,77 +202,28 @@ def train(args):
     print(f"Using device: {device}")
 
     model = PAConv(args, args.num_landmarks).to(device)
-    # Apply weight initialization
     model.apply(weight_init)
 
-    # DataParallel if multiple GPUs
     if args.cuda and torch.cuda.device_count() > 1:
         print(f"Using {torch.cuda.device_count()} GPUs!")
         model = torch.nn.DataParallel(model)
 
-    # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=args.weight_decay)
-
-    # Loss function (Heatmap loss)
-    criterion = AdaptiveWingLoss(omega=14, theta=0.5, epsilon=1, alpha=2.1)
-
-    # Learning rate scheduler (optional)
-    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5) # Example scheduler
+    criterion = nn.MSELoss()  # Simple MSE loss for heatmap regression
 
     best_test_loss = float('inf')
     best_landmark_error = float('inf')
 
-    # Log file setup
     log_dir = os.path.join('./checkpoints', args.exp_name, args.dataset)
     os.makedirs(log_dir, exist_ok=True)
     log_filepath = os.path.join(log_dir, 'training_log.txt')
     
-    # Write header if file is new
     if not os.path.exists(log_filepath) or os.stat(log_filepath).st_size == 0:
         with open(log_filepath, 'w') as f:
             f.write('Epoch\tTest Loss\tLandmark Error\n')
 
     print("Start training...")
     
-    # Create directory for visualizations if it doesn't exist
-    os.makedirs('./visualizations', exist_ok=True)
-
-    # --- Heatmap Visualization for the first sample ---
-    try:
-        points_sample, landmarks_sample, _ = train_dataset[0]
-        points_sample, landmarks_sample = points_sample.to(device).unsqueeze(0), landmarks_sample.to(device).unsqueeze(0) # Add batch dim and move to device
-
-        # 정규화된 포인트와 랜드마크를 함께 얻음
-        points_normal_sample, landmark_normal_sample = normalize_data(points_sample, landmarks_sample)
-
-        # 모델 입력 형태에 맞게 차원 변경 (B, 3, N)
-        points_model_input_sample = points_normal_sample.permute(0, 2, 1)
-
-        # 모델 예측 (히트맵) - 시각화를 위해 모델 예측도 필요
-        with torch.no_grad():
-            pred_heatmap_sample = model(points_model_input_sample)
-        
-        # 정답 히트맵 생성 (정규화된 랜드마크 사용)
-        # generate_heatmap은 (B, N, 3) 형태의 포인트를 기대합니다.
-        true_heatmap_sample = generate_heatmap(points_normal_sample, landmark_normal_sample, sigma=2.0)
-
-        # convert tensors to numpy and remove batch dim for visualization function
-        points_np = points_normal_sample.squeeze(0).cpu().numpy()
-        landmarks_np = landmark_normal_sample.squeeze(0).cpu().numpy()
-        true_heatmap_np = true_heatmap_sample.squeeze(0).cpu().numpy()
-        pred_heatmap_np = pred_heatmap_sample.squeeze(0).cpu().numpy()
-
-        # Visualize the heatmap
-        visualize_heatmap_comparison(points_np, landmarks_np, true_heatmap_np, pred_heatmap_np,
-                                     0, # Use 0 for epoch since this is before training starts
-                                     save_dir='./visualizations') # Save to main visualizations folder for initial check
-
-    except IndexError:
-        print("Warning: train_dataset is empty, skipping heatmap visualization.")
-    except Exception as e:
-        print(f"An error occurred during heatmap visualization: {e}")
-    # --------------------------------------------------
-
     for epoch in range(args.epochs):
         print(f'\nEpoch {epoch+1}/{args.epochs}')
         model.train()
@@ -387,32 +235,27 @@ def train(args):
             
             optimizer.zero_grad()
 
-            # 정규화된 포인트와 랜드마크를 함께 얻음
-            points_normal, landmark_normal = normalize_data(points, landmark)
-
-            # 모델 입력 형태에 맞게 차원 변경 (B, 3, N)
-            points_model_input = points_normal.permute(0, 2, 1)
-
             # 모델 예측 (히트맵)
-            pred_heatmap = model(points_model_input)
+            # points는 (B, N, 3) 형태이므로, (B, 3, N)으로 변환
+            points = points.permute(0, 2, 1)  # (B, N, 3) -> (B, 3, N)
             
-            # 정답 히트맵 생성 (정규화된 랜드마크 사용)
-            # generate_heatmap은 (B, N, 3) 형태의 포인트를 기대합니다.
-            true_heatmap = generate_heatmap(points_normal, landmark_normal, sigma=args.sigma)
+            # PAConv 모델은 입력을 (B, 3, N) 형태로 기대함
+            pred_heatmap = model(points)
             
-            # Heatmap 손실 계산
+            # 정답 히트맵 생성 (points를 다시 (B, N, 3)으로 변환)
+            true_heatmap = generate_heatmap(points.permute(0, 2, 1), landmark, sigma=2.0)
+            
+            # Heatmap 손실 계산 (MSE Loss)
             heatmap_loss = criterion(pred_heatmap, true_heatmap)
             
-            # 예측 랜드마크 위치 추출
-            # get_predicted_landmarks_from_heatmap는 (B, N, 3) 형태의 포인트를 기대합니다.
-            pred_landmarks = get_predicted_landmarks_from_heatmap(points_normal, pred_heatmap)
+            # 예측 랜드마크 위치 추출 (points를 다시 (B, N, 3)으로 변환)
+            pred_landmarks = get_predicted_landmarks_from_heatmap(points.permute(0, 2, 1), pred_heatmap)
 
-            # 랜드마크 위치 오차 계산 (Position Loss)
-            # Use L2 norm (Euclidean distance) as position loss
-            position_loss = torch.norm(pred_landmarks - landmark_normal, dim=2).mean() # Average error per landmark per sample, then average over batch
+            # 랜드마크 위치 오차 계산 (L2 Loss)
+            position_loss = torch.norm(pred_landmarks - landmark, dim=2).mean()
 
-            # 총 손실 계산 (Heatmap Loss + alpha * Position Loss)
-            alpha = 0.1 # Weight for position loss
+            # 총 손실 계산
+            alpha = 0.1  # 논문에서 사용한 가중치
             total_loss = heatmap_loss + alpha * position_loss
 
             total_train_loss += total_loss.item()
@@ -420,64 +263,31 @@ def train(args):
             total_loss.backward()
             optimizer.step()
             
-            # Print training loss periodically
             if (i + 1) % 10 == 0:
                 print(f'  Iter {i+1}/{len(train_loader)}, Loss: {total_loss.item():.6f}')
-                
-        # Visualize heatmap comparison periodically (e.g., every 10 epochs)
-        if (epoch + 1) % 10 == 0:
-             with torch.no_grad(): # Ensure no gradients are computed during visualization
-                 try:
-                     data_sample = next(iter(train_loader))
-                     points_sample, landmark_sample, _ = data_sample
-                     points_sample, landmark_sample = points_sample.to(device), landmark_sample.to(device)
-                     
-                     # 정규화된 포인트와 랜드마크를 함께 얻음
-                     points_normal_sample, landmark_normal_sample = normalize_data(points_sample, landmark_sample)
-                     
-                     # 모델 입력 형태에 맞게 차원 변경 (B, 3, N)
-                     points_model_input_sample = points_normal_sample.permute(0, 2, 1)
-                     
-                     # 모델 예측
-                     pred_heatmap_sample = model(points_model_input_sample)
-                     # 정답 히트맵 생성 (정규화된 랜드마크 사용)
-                     # generate_heatmap은 (B, N, 3) 형태의 포인트를 기대합니다.
-                     true_heatmap_sample = generate_heatmap(points_normal_sample, landmark_normal_sample, sigma=args.sigma)
 
-                     # convert tensors to numpy and remove batch dim for visualization function
-                     points_np = points_normal_sample.squeeze(0).cpu().numpy()
-                     landmarks_np = landmark_normal_sample.squeeze(0).cpu().numpy()
-                     true_heatmap_np = true_heatmap_sample.squeeze(0).cpu().numpy()
-                     pred_heatmap_np = pred_heatmap_sample.squeeze(0).cpu().numpy()
-
-                     visualize_heatmap_comparison(points_np, landmarks_np, 
-                                                  true_heatmap_np, pred_heatmap_np, 
-                                                  epoch + 1) # Pass epoch + 1 for correct naming
-                 except Exception as e:
-                     print(f"Warning: Could not visualize heatmap comparison for epoch {epoch + 1} - {e}")
-
-        # scheduler.step() # If using learning rate scheduler
-
-        # Evaluation after each epoch
-        avg_test_loss, avg_landmark_error = evaluate(model, test_loader, criterion, device)
+        avg_test_loss, avg_landmark_error = evaluate(model, test_loader, criterion, device, epoch, args)
         print(f'Epoch {epoch+1} Evaluation - Test Loss: {avg_test_loss:.6f}, Landmark Error: {avg_landmark_error:.6f}')
 
-        # Save training log
         with open(log_filepath, 'a') as f:
             f.write(f'{epoch+1}\t{avg_test_loss:.6f}\t{avg_landmark_error:.6f}\n')
 
-        # Save best model based on Landmark Error
         if avg_landmark_error < best_landmark_error:
             best_landmark_error = avg_landmark_error
-            best_test_loss = avg_test_loss # Save corresponding test loss
+            best_test_loss = avg_test_loss
             save_path = os.path.join(log_dir, 'models', 'best_model.t7')
             os.makedirs(os.path.join(log_dir, 'models'), exist_ok=True)
-            # Save model state_dict (handle DataParallel if used)
             if isinstance(model, torch.nn.DataParallel):
                 torch.save(model.module.state_dict(), save_path)
             else:
                 torch.save(model.state_dict(), save_path)
             print(f'Best model saved at {save_path} with Landmark Error: {best_landmark_error:.6f}')
+        else:
+            counter += 1
+            print(f'EarlyStopping counter: {counter} out of {patience}')
+            if counter >= patience:
+                print(f'Early stopping triggered after {epoch+1} epochs')
+                break
 
     print("Training finished.")
     print(f"Best Test Loss: {best_test_loss:.6f}, Best Landmark Error: {best_landmark_error:.6f}")
@@ -493,23 +303,16 @@ def test(test_loader, model, criterion, device):
             points = points.to(device)
             landmarks = landmarks.to(device)
             
-            # 정규화
-            point_normal = normalize_data(points)
-            point_normal = point_normal.permute(0, 2, 1)  # (B, 3, N)
-            
             # 추론
-            pred_heatmap = model(point_normal)
+            points = points.permute(0, 2, 1)  # (B, N, 3) -> (B, 3, N)
+            pred_heatmap = model(points)
             
             # 히트맵에서 랜드마크 위치 추출
-            B, L, N = pred_heatmap.shape
-            pred_landmarks = torch.zeros(B, L, 3).to(device)
-            for b in range(B):
-                for l in range(L):
-                    max_idx = torch.argmax(pred_heatmap[b, l])
-                    pred_landmarks[b, l] = point_normal[b, :, max_idx]
+            pred_landmarks = get_predicted_landmarks_from_heatmap(points.permute(0, 2, 1), pred_heatmap)
             
             # 손실 계산
-            loss = criterion(pred_heatmap, landmarks)
+            true_heatmap = generate_heatmap(points.permute(0, 2, 1), landmarks, sigma=2.0)
+            loss = criterion(pred_heatmap, true_heatmap)
             total_loss += loss.item()
             
             # 랜드마크 오차 계산

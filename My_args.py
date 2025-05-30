@@ -21,18 +21,19 @@ parser.add_argument('--workers', type=int, default=4, help='number of data loadi
 
 # train args
 parser.add_argument('--eval', type=bool, default=False, help='evaluate the model')
-parser.add_argument('--batch_size', type=int, default=1, metavar='batch_size', help='Size of batch)')
-parser.add_argument('--test_batch_size', type=int, default=1, metavar='batch_size', help='Size of batch)')
+parser.add_argument('--batch_size', type=int, default=16, metavar='batch_size', help='Size of batch)')
+parser.add_argument('--test_batch_size', type=int, default=16, metavar='batch_size', help='Size of batch)')
 parser.add_argument('--epochs', type=int, default=250, metavar='N', help='number of episode to train')
-parser.add_argument('--dropout', type=float, default=0.5, help='dropout rate')
+parser.add_argument('--dropout', type=float, default=0.3, help='dropout rate')
 
 # optimizor args
-parser.add_argument('--loss', type=str, default='adaptive_wing', metavar='N', choices=['mse', 'adaptive_wing'], help='loss function to use')
+parser.add_argument('--loss', type=str, default='mse', metavar='N', choices=['mse', 'adaptive_wing'], help='loss function to use')
 parser.add_argument('--use_sgd', type=bool, default=False, help='Use SGD')
-parser.add_argument('--lr', type=float, default=0.00005, metavar='LR', help='learning rate (default: 0.001, 0.1 if using sgd)')
+parser.add_argument('--lr', type=float, default=0.0001, metavar='LR', help='learning rate (default: 0.0001, 0.1 if using sgd)')
 parser.add_argument('--momentum', type=float, default=0.9, metavar='M', help='SGD momentum (default: 0.9)')
-parser.add_argument('--scheduler', type=str, default='step', metavar='N', choices=['cos', 'step'], help='Scheduler to use, [cos, step]')
-parser.add_argument('--weight_decay', type=float, default=0, metavar='WD', help='the weight decay of optimizor')
+parser.add_argument('--scheduler', type=str, default='cos', metavar='N', choices=['cos', 'step'], help='Scheduler to use, [cos, step]')
+parser.add_argument('--weight_decay', type=float, default=1e-4, metavar='WD', help='the weight decay of optimizor')
+parser.add_argument('--grad_clip', type=float, default=1.0, help='gradient clipping threshold')
 
 # data process args
 parser.add_argument('--max_threshold', default=10, type=float, help='the maximum threshold of error_rate')
@@ -50,4 +51,17 @@ parser.add_argument('--num_matrices', type=list, default=[8, 8, 8, 8], help='the
 # Add num_points and num_landmarks arguments
 parser.add_argument('--num_points', type=int, default=2048, help='Number of points to sample from each shape')
 parser.add_argument('--num_landmarks', type=int, default=56, help='Number of landmarks')
+
+# CUDA argument
+parser.add_argument('--cuda', action='store_true', help='enable CUDA training')
+parser.add_argument('--no-cuda', action='store_false', dest='cuda', help='disable CUDA training')
+parser.set_defaults(cuda=True) # Default to using CUDA
+
+# Visualization argument
+parser.add_argument('--visualize', action='store_true', help='Enable visualization during training')
+parser.add_argument('--vis_interval', type=int, default=10, help='Visualization interval in epochs')
+parser.set_defaults(visualize=False)  # Default to False
+
+def parse_args():
+    return parser.parse_args()
 
