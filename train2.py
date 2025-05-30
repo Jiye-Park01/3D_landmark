@@ -400,7 +400,6 @@ if __name__ == "__main__":
     _init_(args)  # args를 전달
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     train(args)
-    main()
 
 
 

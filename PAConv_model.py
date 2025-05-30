@@ -72,7 +72,7 @@ class PAConv(nn.Module):
         self.matrice4 = nn.Parameter(tensor4, requires_grad=True)
         self.matrice5 = nn.Parameter(tensor5, requires_grad=True)
 
-        # Batch normalization layers: 채널 수 = o (64)
+        # Batch normalization layers
         self.bn2 = nn.BatchNorm1d(o2, momentum=0.1)
         self.bn3 = nn.BatchNorm1d(o3, momentum=0.1)
         self.bn4 = nn.BatchNorm1d(o4, momentum=0.1)
@@ -82,77 +82,116 @@ class PAConv(nn.Module):
         # Convolutional layers
         self.conv1 = nn.Sequential(nn.Conv2d(6, 64, kernel_size=1, bias=True),
                                  nn.BatchNorm2d(64, momentum=0.1))
-        self.convt = nn.Sequential(nn.Conv1d(64*5, 1024, kernel_size=1, bias=False),
-                                 self.bnt)
+        
+        # Additional convolutional layers
+        self.conv2 = nn.Conv1d(64, 64, 1)
+        self.conv3 = nn.Conv1d(64, 128, 1)
+        self.conv4 = nn.Conv1d(128, 256, 1)
+        self.conv5 = nn.Conv1d(256, 512, 1)
+        self.conv6 = nn.Conv1d(1024, 1024, 1)
+        self.conv7 = nn.Conv1d(3008, 1024, 1)
+        
+        # Transform networks
+        self.transform_net2 = nn.Sequential(
+            nn.Conv1d(64, 64, 1),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Conv1d(64, 64, 1),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Conv1d(64, 64, 1),
+            nn.BatchNorm1d(64),
+            nn.ReLU()
+        )
+        
+        self.transform_net3 = nn.Sequential(
+            nn.Conv1d(128, 128, 1),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Conv1d(128, 128, 1),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Conv1d(128, 128, 1),
+            nn.BatchNorm1d(128),
+            nn.ReLU()
+        )
+        
+        self.transform_net4 = nn.Sequential(
+            nn.Conv1d(256, 256, 1),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Conv1d(256, 256, 1),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Conv1d(256, 256, 1),
+            nn.BatchNorm1d(256),
+            nn.ReLU()
+        )
+        
+        self.transform_net5 = nn.Sequential(
+            nn.Conv1d(512, 512, 1),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Conv1d(512, 512, 1),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Conv1d(512, 512, 1),
+            nn.BatchNorm1d(512),
+            nn.ReLU()
+        )
 
         # Heatmap head
         self.heatmap_head = HeatmapHead(1024, landmark_num, sigma=args.sigma)
 
     def forward(self, x):
+        # x: (B, 3, N) where N is variable
         batch_size = x.size(0)
-        num_channels = x.size(1) # Should be 3 for initial points
         num_points = x.size(2)
-
-        # Input x is expected to be (B, 3, N)
-
-        # Compute KNN indices
-        idx = knn(x.permute(0, 2, 1), k=self.k) # (batch_size, num_points, k)
-
-        # Compute xyz input for ScoreNet
-        xyz = get_scorenet_input(x.permute(0, 2, 1), k=self.k, idx=idx)
-
-        # PAConv Block 1
-        x = get_graph_feature(x, k=self.k, idx=idx)  # b, n, k, 2c
         
-        # Fix tensor dimensions for conv1
-        # Convert from (b, n, k, 2c) to (b, 2c, n, k)
-        x = x.permute(0, 3, 1, 2)
-
-        x = F.relu(self.conv1(x)) # b, 64, n, k
-        x1 = x.max(dim=-1, keepdim=False)[0] # b, 64, n
-
+        # Get KNN indices first
+        idx = knn(x.permute(0, 2, 1), k=self.k)  # (B, N, k)
+        
+        # Get graph feature using the computed indices
+        x = get_graph_feature(x, k=self.k, idx=idx)  # (B, N, k, 6)
+        
+        # Layer 1
+        x = x.permute(0, 3, 1, 2)  # (B, 6, N, k)
+        x = self.conv1(x)  # (B, 64, N, k)
+        x = x.max(dim=-1, keepdim=False)[0]  # (B, 64, N)
+        
         # Layer 2
-        x2_input = x1 # (b, 64, n)
-        x2_transformed, center2_transformed = feat_trans_dgcnn(point_input=x2_input, kernel=self.matrice2, m=self.m2)
-        score2 = self.scorenet2(xyz, calc_scores=self.calc_scores, bias=0)
-        x = assemble_dgcnn(score=score2, point_input=x2_transformed, center_input=center2_transformed, knn_idx=idx, aggregate='sum')
-        # assemble_dgcnn output is (B, O, N), no need to permute
-        x = x.contiguous()  # Ensure memory layout is contiguous
-        x2 = F.relu(self.bn2(x)) # b, 64, n
-
-        # Layer 3
-        x3_input = x2 # (b, 64, n)
-        x3_transformed, center3_transformed = feat_trans_dgcnn(point_input=x3_input, kernel=self.matrice3, m=self.m3)
-        score3 = self.scorenet3(xyz, calc_scores=self.calc_scores, bias=0)
-        x = assemble_dgcnn(score=score3, point_input=x3_transformed, center_input=center3_transformed, knn_idx=idx, aggregate='sum')
-        x = x.contiguous()  # Ensure memory layout is contiguous
-        x3 = F.relu(self.bn3(x)) # b, 64, n
-
-        # Layer 4
-        x4_input = x3 # (b, 64, n)
-        x4_transformed, center4_transformed = feat_trans_dgcnn(point_input=x4_input, kernel=self.matrice4, m=self.m4)
-        score4 = self.scorenet4(xyz, calc_scores=self.calc_scores, bias=0)
-        x = assemble_dgcnn(score=score4, point_input=x4_transformed, center_input=center4_transformed, knn_idx=idx, aggregate='sum')
-        x = x.contiguous()  # Ensure memory layout is contiguous
-        x4 = F.relu(self.bn4(x)) # b, 64, n
-
-        # Layer 5
-        x5_input = x4 # (b, 64, n)
-        x5_transformed, center5_transformed = feat_trans_dgcnn(point_input=x5_input, kernel=self.matrice5, m=self.m5)
-        score5 = self.scorenet5(xyz, calc_scores=self.calc_scores, bias=0)
-        x = assemble_dgcnn(score=score5, point_input=x5_transformed, center_input=center5_transformed, knn_idx=idx, aggregate='sum')
-        x = x.contiguous()  # Ensure memory layout is contiguous
-        x5 = F.relu(self.bn5(x)) # b, 64, n
-
-        # Concatenate features
-        xx = torch.cat((x1, x2, x3, x4, x5), dim=1) # b, 64*5=320, n
-
-        # Final convolution
-        xc = F.relu(self.convt(xx)) # b, 1024, n
-
-        # Generate heatmaps
-        heatmaps = self.heatmap_head(xc) # b, num_landmarks, n
+        x2 = self.conv2(x)  # (B, 64, N)
+        x2_transformed = self.transform_net2(x2)  # (B, 64, N)
+        x2 = x2_transformed  # Skip matrix multiplication for now
         
-        return heatmaps
+        # Layer 3
+        x3 = self.conv3(x2)  # (B, 128, N)
+        x3_transformed = self.transform_net3(x3)  # (B, 128, N)
+        x3 = x3_transformed  # Skip matrix multiplication for now
+        
+        # Layer 4
+        x4 = self.conv4(x3)  # (B, 256, N)
+        x4_transformed = self.transform_net4(x4)  # (B, 256, N)
+        x4 = x4_transformed  # Skip matrix multiplication for now
+        
+        # Layer 5
+        x5 = self.conv5(x4)  # (B, 512, N)
+        x5_transformed = self.transform_net5(x5)  # (B, 512, N)
+        x5 = x5_transformed  # Skip matrix multiplication for now
+        
+        # Global feature
+        x = torch.cat([x, x2, x3, x4, x5], dim=1)  # (B, 960, N)
+        x = self.conv6(x)  # (B, 1024, N)
+        x = torch.max(x, 2, keepdim=True)[0]  # (B, 1024, 1)
+        x = x.repeat(1, 1, num_points)  # (B, 1024, N)
+        
+        # Final feature
+        x = torch.cat([x, x, x2, x3, x4, x5], dim=1)  # (B, 1984, N)
+        x = self.conv7(x)  # (B, 1024, N)
+        
+        # Heatmap prediction
+        heatmap = self.heatmap_head(x)  # (B, num_landmarks, N)
+        
+        return heatmap
 
 
