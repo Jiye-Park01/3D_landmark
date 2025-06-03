@@ -59,7 +59,6 @@ parser.set_defaults(cuda=True) # Default to using CUDA
 
 # Visualization argument
 parser.add_argument('--visualize', action='store_true', help='Enable visualization during training')
-parser.add_argument('--vis_interval', type=int, default=10, help='Visualization interval in epochs')
 parser.set_defaults(visualize=False)  # Default to False
 
 def parse_args():

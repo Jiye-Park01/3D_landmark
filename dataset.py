@@ -25,29 +25,39 @@ class FaceLandmarkData(Dataset):
         
         print(f"Loading data from: {data_dir}")
         
-        # Get all shape files
-        self.shape_files = sorted(glob.glob(os.path.join(data_dir, 'shapes', '*_FC_A.npy')))
+        # Get all shape files (both FC_A and FC_C)
+        self.shape_files = []
+        self.shape_files.extend(glob.glob(os.path.join(data_dir, 'shapes', '*_FC_A.npy')))
+        self.shape_files.extend(glob.glob(os.path.join(data_dir, 'shapes', '*_FC_C.npy')))
+        self.shape_files = sorted(self.shape_files)
         print(f"Found {len(self.shape_files)} shape files")
         
-        # Get corresponding landmark files by replacing FC_A with FA_A
+        # Get corresponding landmark files by replacing FC_A/FC_C with FA_A/FA_C
         self.landmark_files = []
         for shape_file in self.shape_files:
-            landmark_file = shape_file.replace('shapes', 'landmarks').replace('FC_A', 'FA_A')
+            if 'FC_A' in shape_file:
+                landmark_file = shape_file.replace('shapes', 'landmarks').replace('FC_A', 'FA_A')
+            else:  # FC_C
+                landmark_file = shape_file.replace('shapes', 'landmarks').replace('FC_C', 'FA_C')
+            
             if os.path.exists(landmark_file):
                 self.landmark_files.append(landmark_file)
             else:
                 print(f"Warning: Landmark file not found for {shape_file}")
         
         # Remove shape files that don't have corresponding landmark files
-        self.shape_files = [f for f in self.shape_files if f.replace('shapes', 'landmarks').replace('FC_A', 'FA_A') in self.landmark_files]
+        self.shape_files = [f for f in self.shape_files if (
+            (f.replace('shapes', 'landmarks').replace('FC_A', 'FA_A') in self.landmark_files) or
+            (f.replace('shapes', 'landmarks').replace('FC_C', 'FA_C') in self.landmark_files)
+        )]
         
         assert len(self.shape_files) == len(self.landmark_files), "Number of shape files and landmark files must match"
         print(f"Found {len(self.shape_files)} matching pairs of shape and landmark files")
         
         if len(self.shape_files) == 0:
             print("ERROR: No matching files found!")
-            print(f"Shape files pattern: {os.path.join(data_dir, 'shapes', '*_FC_A.npy')}")
-            print(f"Landmark files pattern: {os.path.join(data_dir, 'landmarks', '*_FA_A.npy')}")
+            print(f"Shape files patterns: {os.path.join(data_dir, 'shapes', '*_FC_A.npy')} and {os.path.join(data_dir, 'shapes', '*_FC_C.npy')}")
+            print(f"Landmark files patterns: {os.path.join(data_dir, 'landmarks', '*_FA_A.npy')} and {os.path.join(data_dir, 'landmarks', '*_FA_C.npy')}")
             return
         
         # Split into train and val sets (90% train, 10% val)
