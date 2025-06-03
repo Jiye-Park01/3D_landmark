@@ -91,6 +91,7 @@ def visualize_heatmap(points, heatmap, save_path):
     ax1 = fig.add_subplot(131, projection='3d')
     ax1.scatter(points[:, 0], points[:, 1], points[:, 2], c='gray', s=1, alpha=0.5)
     ax1.set_title('Point Cloud')
+    ax1.view_init(elev=90, azim=0)  # z축 방향으로 위에서 아래로 보기
     
     # 히트맵 시각화 (첫 번째 랜드마크)
     ax2 = fig.add_subplot(132, projection='3d')
@@ -98,6 +99,7 @@ def visualize_heatmap(points, heatmap, save_path):
                          c=heatmap[0], cmap='hot', s=1)
     plt.colorbar(scatter, ax=ax2)
     ax2.set_title('Heatmap (Landmark 1)')
+    ax2.view_init(elev=90, azim=0)  # z축 방향으로 위에서 아래로 보기
     
     # 히트맵 시각화 (두 번째 랜드마크)
     ax3 = fig.add_subplot(133, projection='3d')
@@ -105,6 +107,7 @@ def visualize_heatmap(points, heatmap, save_path):
                          c=heatmap[1], cmap='hot', s=1)
     plt.colorbar(scatter, ax=ax3)
     ax3.set_title('Heatmap (Landmark 2)')
+    ax3.view_init(elev=90, azim=0)  # z축 방향으로 위에서 아래로 보기
     
     plt.tight_layout()
     plt.savefig(save_path)
@@ -116,7 +119,7 @@ def main():
     print(f"Using device: {device}")
     
     # 모델 로드
-    model_path = './checkpoints/Face alignment with PAConv/custom_2/models/best_model.t7'
+    model_path = './checkpoints/Face alignment with PAConv/custom/models/best_model.t7'
     if not os.path.exists(model_path):
         print(f"Error: Model file not found at {model_path}")
         return
@@ -153,9 +156,17 @@ def main():
         print(f"Number of points: {len(points)}")
         print(f"Number of landmarks: {len(pred_landmarks)}")
         
+        # 각 랜드마크별 에러 계산
+        landmark_errors = np.linalg.norm(pred_landmarks - true_landmarks.numpy(), axis=1)
+        print("\nLandmark-wise errors (mm):")
+        for l in range(len(landmark_errors)):
+            print(f"Landmark {l+1}: {landmark_errors[l]:.4f} mm")
+        
         # 평균 오차 계산
-        error = np.mean(np.linalg.norm(pred_landmarks - true_landmarks.numpy(), axis=1))
-        print(f"Average landmark error: {error:.4f}")
+        error = np.mean(landmark_errors)
+        print(f"\nAverage landmark error: {error:.4f} mm")
+        print(f"Max error: {np.max(landmark_errors):.4f} mm")
+        print(f"Min error: {np.min(landmark_errors):.4f} mm")
         
         # 히트맵 시각화 및 저장
         heatmap_path = f'./results/heatmaps/sample_{i+1}_heatmap.png'
@@ -170,7 +181,8 @@ def main():
             'true_landmarks': true_landmarks.numpy(),
             'predicted_landmarks': pred_landmarks,
             'heatmap': pred_heatmap,
-            'error': error
+            'error': error,
+            'landmark_errors': landmark_errors  # 각 랜드마크별 에러 추가
         }
         
         # npy 파일로 저장
