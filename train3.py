@@ -25,16 +25,24 @@ import shutil
 from init import _init_, weight_init  # _init_ 함수를 명시적으로 import
 from My_args import *
 from augmentations import *
-from dataset import FaceLandmarkData, custom_collate_fn
+from dataset import FaceLandmarkData, get_dataloader
 from loss import AdaptiveWingLoss
-from util import main_sample
+from util import main_sample, load_model
 from PAConv_model import PAConv
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def custom_collate_fn(batch):
-    points = torch.stack([item[0] for item in batch])
-    landmarks = torch.stack([item[1] for item in batch])
+    points_list = [item[0] for item in batch]
+    landmarks_list = [item[1] for item in batch]
+
+    # Points are now expected to be already padded to the global max_num_points in __getitem__.
+    # So we can directly stack them.
+    points = torch.stack(points_list)
+    
+    # Stack landmarks (assuming they are already consistent in size within __getitem__)
+    landmarks = torch.stack(landmarks_list)
+
     return points, landmarks, None
 
 def generate_heatmap(points, landmarks, sigma=5.0):
@@ -122,14 +130,14 @@ def evaluate(model, test_loader, criterion, device):
 def train(args):
     _init_(args) # Initialize folders
     
-    print(f"DEBUG: args.data_dir after _init_: {args.data_dir}")
+    # print(f"DEBUG: args.data_dir after _init_: {args.data_dir}")
 
-    # Convert absolute data_dir to relative if necessary
-    # The previous parsing seems to incorrectly make it absolute, force it to be relative to CWD
-    args.data_dir = './dataset'
+    # # Convert absolute data_dir to relative if necessary
+    # # The previous parsing seems to incorrectly make it absolute, force it to be relative to CWD
+    # args.data_dir = './dataset'
 
-    print(f"Number of points to sample: {args.num_points}")
-    print(f"Number of landmarks: {args.num_landmarks}") # args.num_landmarks is 57
+    # print(f"Number of points to sample: {args.num_points}")
+    # print(f"Number of landmarks: {args.num_landmarks}") # args.num_landmarks is 57
 
     train_dataset = FaceLandmarkData(data_dir=args.data_dir, num_points=args.num_points, partition='train')
     test_dataset = FaceLandmarkData(data_dir=args.data_dir, num_points=args.num_points, partition='val')
@@ -169,6 +177,11 @@ def train(args):
 
     best_test_loss = float('inf')
     best_landmark_error = float('inf')
+
+    # Early Stopping parameters
+    patience_limit = 20 # Number of epochs to wait for improvement
+    patience_counter = 0
+    min_delta = 0.0001 # Minimum change to be considered an improvement
 
     # Log file setup
     log_dir = os.path.join('./checkpoints', args.exp_name, args.dataset)
@@ -235,10 +248,13 @@ def train(args):
         with open(log_filepath, 'a') as f:
             f.write(f'{epoch+1}\t{avg_test_loss:.6f}\t{avg_landmark_error:.6f}\n')
 
-        # Save best model based on Landmark Error
-        if avg_landmark_error < best_landmark_error:
+        # Early Stopping logic
+        if avg_landmark_error < best_landmark_error - min_delta:
+            print(f'Landmark error improved from {best_landmark_error:.6f} to {avg_landmark_error:.6f}. Saving model.')
             best_landmark_error = avg_landmark_error
             best_test_loss = avg_test_loss # Save corresponding test loss
+            patience_counter = 0 # Reset patience counter
+            
             save_path = os.path.join(log_dir, 'models', 'best_model.t7')
             os.makedirs(os.path.join(log_dir, 'models'), exist_ok=True)
             # Save model state_dict (handle DataParallel if used)
@@ -247,6 +263,12 @@ def train(args):
             else:
                 torch.save(model.state_dict(), save_path)
             print(f'Best model saved at {save_path} with Landmark Error: {best_landmark_error:.6f}')
+        else:
+            patience_counter += 1
+            print(f'Landmark error did not improve. Patience: {patience_counter}/{patience_limit}')
+            if patience_counter >= patience_limit:
+                print(f'Early stopping triggered! No improvement for {patience_limit} epochs.')
+                break # Exit the training loop
 
     print("Training finished.")
     print(f"Best Test Loss: {best_test_loss:.6f}, Best Landmark Error: {best_landmark_error:.6f}")
@@ -365,6 +387,11 @@ if __name__ == "__main__":
     print(f"DEBUG: args.data_dir after parsing: {args.data_dir}")
     _init_(args)  # args를 전달
     args.cuda = not args.no_cuda and torch.cuda.is_available()
+
+    # Fix for RuntimeError: The size of tensor a (57) must match the size of tensor b (56) at non-singleton dimension 1
+    # Explicitly set num_landmarks to match dataset (57) if My_args.py defines it as 56.
+    args.num_landmarks = 57
+
     train(args)
     main()
 
