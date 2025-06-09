@@ -150,3 +150,6 @@ lib/**/*.ninja*
 dataset/
 *.DS_Store
 .vscode/
+
+# model weights
+*.t7
