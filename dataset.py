@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import os
 import glob
 
@@ -17,11 +17,8 @@ class FaceLandmarkData(Dataset):
     def __init__(self, data_dir, partition='trainval', num_points=2048):
         self.data_dir = data_dir
         self.partition = partition
-        self.num_points = num_points
+        self.num_points = num_points # This will be overridden by max_points_in_dataset
         self.indices = []  # Initialize indices as empty list
-        
-        print(f"DEBUG: data_dir received: {data_dir}")
-        print(f"DEBUG: Current working directory: {os.getcwd()}")
         
         print(f"Loading data from: {data_dir}")
         
@@ -60,6 +57,21 @@ class FaceLandmarkData(Dataset):
             print(f"Landmark files patterns: {os.path.join(data_dir, 'landmarks', '*_FA_A.npy')} and {os.path.join(data_dir, 'landmarks', '*_FA_C.npy')}")
             return
         
+        # --- Calculate global max_num_points from the dataset ---
+        print("Calculating maximum number of points across the dataset...")
+        max_points_in_dataset = 0
+        for shape_file_path in self.shape_files:
+            try:
+                points_data = np.load(shape_file_path)
+                if points_data.shape[0] > max_points_in_dataset:
+                    max_points_in_dataset = points_data.shape[0]
+            except Exception as e:
+                print(f"Warning: Could not load {shape_file_path} to determine max points: {e}")
+        
+        self.num_points = max_points_in_dataset
+        print(f"Global maximum points in dataset set to: {self.num_points}")
+        # --------------------------------------------------------
+        
         # Split into train and val sets (90% train, 10% val)
         num_samples = len(self.shape_files)
         indices = np.random.permutation(num_samples)
@@ -74,23 +86,32 @@ class FaceLandmarkData(Dataset):
         return len(self.indices)
 
     def __getitem__(self, idx):
-        shape_file = self.shape_files[idx]
-        landmark_file = self.landmark_files[idx]
+        # Get the index within the filtered lists (self.shape_files, self.landmark_files)
+        actual_filtered_idx = self.indices[idx]
         
-        # Load point cloud and landmarks
-        points = np.load(shape_file)  # (N, 3)
-        landmarks = np.load(landmark_file)  # (M, 3)
-        
-        # 모든 포인트 사용 (샘플링 제거)
-        # if len(points) > self.num_points:
-        #     indices = np.random.choice(len(points), self.num_points, replace=False)
-        #     points = points[indices]
-        
+        # Load point cloud
+        points = np.load(self.shape_files[actual_filtered_idx])  # (Original_N, 3)
+
+        original_num_points = points.shape[0] # Store original shape for debug prints
+        # print(f"DEBUG: __getitem__ - Item {idx}, Original Shape: {original_num_points}, Global Target num_points: {self.num_points}") # Removed debug print
+
+        if original_num_points < self.num_points:
+            # Pad with zeros if fewer points than the global target num_points
+            padding_needed = self.num_points - original_num_points
+            padding = np.zeros((padding_needed, points.shape[1]), dtype=points.dtype)
+            points = np.vstack((points, padding))
+            # print(f"DEBUG: __getitem__ - Padded Item {idx}. New Shape: {points.shape}") # Removed debug print
+        # else (original_num_points == self.num_points), do nothing.
+        # Points with original_num_points > self.num_points should not occur after __init__ modification.
+
+        # Load landmarks
+        landmarks = np.load(self.landmark_files[actual_filtered_idx])  # (num_landmarks, 3)
+
         # Convert to torch tensors
-        points = torch.from_numpy(points).float()
-        landmarks = torch.from_numpy(landmarks).float()
-        
-        return points, landmarks, shape_file
+        points = torch.FloatTensor(points)  # (potentially varied_N, 3)
+        landmarks = torch.FloatTensor(landmarks)  # (num_landmarks, 3)
+
+        return points, landmarks # Return only points and landmarks, no None
 
 def custom_collate_fn(batch):
     # Find max number of points in the batch
@@ -114,6 +135,18 @@ def custom_collate_fn(batch):
     landmarks = torch.stack(landmarks)
     
     return padded_points, landmarks, shape_files
+
+def get_dataloader(data_dir, batch_size, num_workers=4, transform=None, partition='train'):
+    dataset = FaceLandmarkData(data_dir, partition=partition, num_points=2048) # num_points to match args default
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True if partition == 'train' else False,
+        num_workers=num_workers,
+        pin_memory=True,
+        collate_fn=custom_collate_fn if 'custom_collate_fn' in globals() else None # Use custom collate if available
+    )
+    return dataloader
 
 
 

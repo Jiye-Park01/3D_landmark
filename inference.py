@@ -12,7 +12,7 @@ import torch.nn.functional as F
 def load_model(model_path, device):
     # 모델 초기화
     args = parser.parse_args()
-    model = PAConv(args, 56).to(device)  # 57 landmarks
+    model = PAConv(args, 57).to(device)  # 57 landmarks
     
     # 학습된 가중치 로드
     state_dict = torch.load(model_path)
@@ -30,28 +30,29 @@ def load_model(model_path, device):
 
 def predict_landmarks(model, points, device):
     with torch.no_grad():
-        points = points.unsqueeze(0).to(device)  # Add batch dimension (B, N, 3)
-        # normalize_data(points)  # 정규화 제거
+        original_points = points.unsqueeze(0).to(device)  # Add batch dimension (B, N, 3) and keep original
+        
+        # Apply normalization (as done during training) for model input
+        normalized_points = normalize_data(original_points) # Renamed variable to clearly distinguish
 
         # 모델은 (B, 3, N) 형태를 기대하므로 차원 변환
-        points_permuted = points.permute(0, 2, 1)
+        points_model_input = normalized_points.permute(0, 2, 1) # Use normalized points for model
         
-        pred_heatmap = model(points_permuted)
+        pred_heatmap = model(points_model_input)
         
         # 히트맵에서 랜드마크 위치 추출 (원본 points 사용)
-        # get_predicted_landmarks_from_heatmap 함수 사용을 권장하지만, 기존 로직 유지
         B, L, N = pred_heatmap.shape
-        pred_landmarks = torch.zeros(B, L, 3).to(device)
-        points_np = points[0].cpu().numpy() # 원본 points numpy 배열
-        pred_heatmap_np = pred_heatmap[0].cpu().numpy() # 예측 히트맵 numpy 배열
-        
-        for l in range(L):
-            # Find the index of the point with the maximum heatmap value for landmark l
-            max_idx = np.argmax(pred_heatmap_np[l])
-            # Get the 3D coordinate of this point from original points
-            pred_landmarks[0, l] = torch.from_numpy(points_np[max_idx, :]).to(device)
+        pred_landmarks_tensor = torch.zeros(B, L, 3).to(device) # Use a new tensor for predicted landmarks
 
-        return pred_landmarks[0].cpu().numpy(), pred_heatmap[0].cpu().numpy()
+        # Replicate get_predicted_landmarks_from_heatmap logic from train3.py
+        # It uses the ORIGINAL points to get the 3D coordinates
+        for b in range(B):
+            for l in range(L):
+                max_idx = torch.argmax(pred_heatmap[b, l])
+                pred_landmarks_tensor[b, l] = original_points[b, max_idx, :]
+
+        # Return as numpy arrays, removing batch dimension
+        return pred_landmarks_tensor.squeeze(0).cpu().numpy(), pred_heatmap.squeeze(0).cpu().numpy()
 
 def visualize_results(points, true_landmarks, pred_landmarks, save_path=None):
     fig = plt.figure(figsize=(15, 5))
@@ -138,7 +139,7 @@ def main():
     # 몇 개의 샘플에 대해 예측 수행
     num_samples = min(5, len(test_dataset))  # 최대 5개 샘플
     for i in range(num_samples):
-        points, true_landmarks, _ = test_dataset[i]
+        points, true_landmarks = test_dataset[i]
         
         # 원본 파일 이름 가져오기
         shape_file = test_dataset.shape_files[test_dataset.indices[i]]
