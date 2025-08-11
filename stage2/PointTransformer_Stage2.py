@@ -7,10 +7,71 @@ import os
 # 3D_pointtransformer 경로 추가 (lib.pointops 모듈을 위해)
 sys.path.append('/home/jhrew/jiye/3D_pointtransformer')
 
-# Stage 1의 PointTransformer 모델 import
-sys.path.append('/home/jhrew/jiye/3D_landmark')
+# Stage 1의 PointTransformer 모델 import - 상대 경로 사용
+sys.path.append('..')  # stage2 디렉토리에서 상위 디렉토리로
 from PointTransformer_model import PointTransformerLandmark
 
+##############################################
+class GlobalFeatureExtractor(nn.Module):
+    """Improved Global Feature Extractor using Avg+Max+Std+GeM pooling"""
+    def __init__(self, landmark_num=68, feature_dim=512):
+        super().__init__()
+        self.landmark_num = landmark_num
+        self.feature_dim = feature_dim
+        
+        # GeM pooling parameter (learnable)
+        self.gem_p = nn.Parameter(torch.ones(1) * 3.0)
+        
+        # Feature projection MLP
+        # Input: Avg(68) + Max(68) + Std(68) + GeM(68) = 272
+        input_dim = landmark_num * 4  # 68 * 4 = 272
+        self.feature_proj = nn.Sequential(
+            nn.Linear(input_dim, 512),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(512, feature_dim)
+        )
+        
+    def forward(self, heatmaps):
+        """
+        Args:
+            heatmaps: (B, 68, N) - heatmap predictions from Stage 1
+        Returns:
+            global_features: (B, 512) - extracted global features
+        """
+        batch_size = heatmaps.size(0)
+        
+        # 1. Average Pooling across points
+        avg_features = torch.mean(heatmaps, dim=2)  # (B, 68)
+        
+        # 2. Max Pooling across points
+        max_features = torch.max(heatmaps, dim=2)[0]  # (B, 68)
+        
+        # 3. Standard Deviation across points
+        std_features = torch.std(heatmaps, dim=2)  # (B, 68)
+        
+        # 4. GeM (Generalized Mean) Pooling across points
+        # GeM: (1/N * sum(x^p))^(1/p) where p is learnable
+        p = self.gem_p.clamp(min=1e-6, max=10.0)  # Clamp p to avoid numerical issues
+        gem_features = torch.pow(torch.mean(torch.pow(heatmaps, p), dim=2), 1.0/p)  # (B, 68)
+        
+        # 5. Concatenate all pooling features
+        pooled_features = torch.cat([
+            avg_features,    # (B, 68)
+            max_features,    # (B, 68)
+            std_features,    # (B, 68)
+            gem_features     # (B, 68)
+        ], dim=1)  # (B, 272)
+        
+        # 6. Project to final feature dimension
+        global_features = self.feature_proj(pooled_features)  # (B, 272) → (B, 512)
+        
+        return global_features
+
+##############################################
 class CoarseToFineHead(nn.Module):
     """Coarse-to-Fine Regression Head for precise 3D landmark prediction"""
     def __init__(self, input_dim, landmark_num, hidden_dim=256):
@@ -84,18 +145,17 @@ class PointTransformerStage2(nn.Module):
         if hasattr(self.stage1_model, 'freeze_backbone'):
             self.stage1_model.freeze_backbone()
         
-        # Get feature dimension from Stage 1 model
-        # Assuming Stage 1 model has a global feature extractor
-        feature_dim = 512  # Adjust based on your Stage 1 model's feature dimension
+        # Improved Global Feature Extractor
+        self.global_feature_extractor = GlobalFeatureExtractor(
+            landmark_num=landmark_num,
+            feature_dim=512
+        )
         
         # Coarse-to-Fine Regression Head
         self.coarse_to_fine_head = CoarseToFineHead(
-            input_dim=feature_dim,
+            input_dim=512,  # Global feature dimension
             landmark_num=landmark_num
         )
-        
-        # Global feature extractor (if needed)
-        self.global_pool = nn.AdaptiveAvgPool1d(1)
         
     def forward(self, x):
         """
@@ -109,19 +169,8 @@ class PointTransformerStage2(nn.Module):
         # Get heatmap predictions from Stage 1 model
         heatmaps = self.stage1_model(x)  # (B, L, N)
         
-        # Extract global features for regression
-        # Use the last layer features from Stage 1 model
-        # This might need adjustment based on your Stage 1 model architecture
-        batch_size = x.size(0)
-        
-        # For now, we'll use a simple approach: average pooling of heatmaps
-        # In practice, you might want to extract features from intermediate layers
-        global_features = torch.mean(heatmaps, dim=2)  # (B, L)
-        global_features = torch.mean(global_features, dim=1, keepdim=True)  # (B, 1)
-        
-        # Expand to match expected feature dimension
-        # This is a placeholder - you should extract actual features from Stage 1
-        global_features = global_features.expand(-1, 512)  # (B, 512)
+        # Extract improved global features using Avg+Max+Std+GeM + MLP
+        global_features = self.global_feature_extractor(heatmaps)  # (B, 512)
         
         # Coarse-to-Fine regression
         coarse_landmarks, refined_landmarks = self.coarse_to_fine_head(global_features)
