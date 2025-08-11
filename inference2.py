@@ -1,0 +1,238 @@
+import torch
+import numpy as np
+from My_args import *
+from PAConv_model import PAConv
+from dataset import FaceLandmarkData
+from augmentations import normalize_data
+import os
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import torch.nn.functional as F
+
+##### 가장 안좋은 상위 5개 샘플 찾기 #####
+
+
+def load_model(model_path, device):
+    # 모델 초기화
+    args = parser.parse_args()
+    model = PAConv(args, 57).to(device)  # 57 landmarks
+    
+    # 학습된 가중치 로드
+    checkpoint = torch.load(model_path, map_location=device) # Load the full checkpoint
+    
+    # Check if the loaded checkpoint is a dictionary containing 'model_state_dict'
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
+        print("Loaded model state_dict from full checkpoint.")
+    else:
+        # Assume it's an old format checkpoint directly containing the model state_dict
+        state_dict = checkpoint
+        print("Loaded model state_dict from old format checkpoint.")
+
+    # DataParallel로 저장된 모델의 경우 'module.' 접두사 제거
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith('module.'):
+            new_state_dict[k[7:]] = v  # 'module.' 제거
+        else:
+            new_state_dict[k] = v
+    
+    model.load_state_dict(new_state_dict)
+    model.eval()  # 평가 모드로 설정
+    return model
+
+def predict_landmarks(model, points, device):
+    with torch.no_grad():
+        original_points = points.unsqueeze(0).to(device)  # Add batch dimension (B, N, 3) and keep original
+        
+        # Apply normalization (as done during training) for model input
+        normalized_points = normalize_data(original_points) # Renamed variable to clearly distinguish
+
+        # 모델은 (B, 3, N) 형태를 기대하므로 차원 변환
+        points_model_input = normalized_points.permute(0, 2, 1) # Use normalized points for model
+        
+        pred_heatmap = model(points_model_input)
+        
+        # 히트맵에서 랜드마크 위치 추출 (원본 points 사용)
+        B, L, N = pred_heatmap.shape
+        pred_landmarks_tensor = torch.zeros(B, L, 3).to(device) # Use a new tensor for predicted landmarks
+
+        # Replicate get_predicted_landmarks_from_heatmap logic from train3.py
+        # It uses the ORIGINAL points to get the 3D coordinates
+        for b in range(B):
+            for l in range(L):
+                max_idx = torch.argmax(pred_heatmap[b, l])
+                pred_landmarks_tensor[b, l] = original_points[b, max_idx, :]
+
+        # Return as numpy arrays, removing batch dimension
+        return pred_landmarks_tensor.squeeze(0).cpu().numpy(), pred_heatmap.squeeze(0).cpu().numpy()
+
+def visualize_results(points, true_landmarks, pred_landmarks, save_path=None):
+    fig = plt.figure(figsize=(15, 5))
+    
+    # 3D 뷰
+    ax1 = fig.add_subplot(121, projection='3d')
+    ax1.scatter(points[:, 0], points[:, 1], points[:, 2], c='gray', s=1, alpha=0.1)
+    ax1.scatter(true_landmarks[:, 0], true_landmarks[:, 1], true_landmarks[:, 2], c='blue', s=50, label='True')
+    ax1.scatter(pred_landmarks[:, 0], pred_landmarks[:, 1], pred_landmarks[:, 2], c='red', s=50, label='Predicted')
+    ax1.set_title('3D View')
+    ax1.legend()
+    
+    # 정면 뷰 (X-Y 평면)
+    ax2 = fig.add_subplot(122)
+    ax2.scatter(points[:, 0], points[:, 1], c='gray', s=1, alpha=0.1)
+    ax2.scatter(true_landmarks[:, 0], true_landmarks[:, 1], c='blue', s=50, label='True')
+    ax2.scatter(pred_landmarks[:, 0], pred_landmarks[:, 1], c='red', s=50, label='Predicted')
+    ax2.set_title('Front View (X-Y)')
+    ax2.legend()
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path)
+        print(f"Saved visualization to {save_path}")
+    else:
+        plt.show()
+    
+    plt.close()
+
+def visualize_heatmap(points, heatmap, save_path):
+    """히트맵을 시각화하고 저장하는 함수"""
+    # 3D 시각화
+    fig = plt.figure(figsize=(15, 5))
+    
+    # 원본 포인트 클라우드
+    ax1 = fig.add_subplot(131, projection='3d')
+    ax1.scatter(points[:, 0], points[:, 1], points[:, 2], c='gray', s=1, alpha=0.5)
+    ax1.set_title('Point Cloud')
+    ax1.view_init(elev=90, azim=0)  # z축 방향으로 위에서 아래로 보기
+    
+    # 히트맵 시각화 (첫 번째 랜드마크)
+    ax2 = fig.add_subplot(132, projection='3d')
+    scatter = ax2.scatter(points[:, 0], points[:, 1], points[:, 2], 
+                         c=heatmap[0], cmap='hot', s=1)
+    plt.colorbar(scatter, ax=ax2)
+    ax2.set_title('Heatmap (Landmark 1)')
+    ax2.view_init(elev=90, azim=0)  # z축 방향으로 위에서 아래로 보기
+    
+    # 히트맵 시각화 (두 번째 랜드마크)
+    ax3 = fig.add_subplot(133, projection='3d')
+    scatter = ax3.scatter(points[:, 0], points[:, 1], points[:, 2], 
+                         c=heatmap[1], cmap='hot', s=1)
+    plt.colorbar(scatter, ax=ax3)
+    ax3.set_title('Heatmap (Landmark 2)')
+    ax3.view_init(elev=90, azim=0)  # z축 방향으로 위에서 아래로 보기
+    
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+def main():
+    # GPU 사용 가능 여부 확인
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # 모델 로드
+    model_path = './checkpoints/Face alignment with PAConv/custom/models/best_model.t7'
+    if not os.path.exists(model_path):
+        print(f"Error: Model file not found at {model_path}")
+        return
+    
+    model = load_model(model_path, device)
+    print("Model loaded successfully!")
+    
+    # 테스트 데이터셋 로드
+    test_dataset = FaceLandmarkData(data_dir='./dataset', partition='val')
+    print(f"Loaded {len(test_dataset)} test samples")
+    
+    # 결과 저장 디렉토리 생성
+    os.makedirs('./results', exist_ok=True)
+    os.makedirs('./results/heatmaps', exist_ok=True)
+
+    all_sample_results = []
+
+    print("\nEvaluating all test samples to find worst performing ones...")
+    # 첫 번째 패스: 모든 샘플에 대한 오차 계산
+    for i in range(len(test_dataset)):
+        points, true_landmarks = test_dataset[i]
+        
+        # 예측 수행
+        pred_landmarks, _ = predict_landmarks(model, points, device) # 히트맵은 나중에 필요할 때 다시 계산
+
+        # 각 랜드마크별 에러 계산
+        landmark_errors = np.linalg.norm(pred_landmarks - true_landmarks.numpy(), axis=1)
+        # 평균 오차 계산
+        error = np.mean(landmark_errors)
+        
+        all_sample_results.append({
+            'error': error,
+            'index_in_dataset': i,
+            'shape_file': test_dataset.shape_files[test_dataset.indices[i]],
+            'landmark_file': test_dataset.landmark_files[test_dataset.indices[i]],
+            'points': points,
+            'true_landmarks': true_landmarks,
+            'predicted_landmarks': pred_landmarks,
+            'landmark_errors': landmark_errors
+        })
+
+    # 오차를 기준으로 정렬
+    all_sample_results.sort(key=lambda x: x['error'], reverse=True)
+
+    # 가장 오차가 낮은 상위 5개 샘플 선택
+    # best_5_samples = all_sample_results[:min(5, len(all_sample_results))]
+    worst_5_samples = all_sample_results[:min(5, len(all_sample_results))]
+
+    print(f"\nProcessing and saving results for the top {len(worst_5_samples)} worst performing samples:")
+    # 두 번째 패스: 선택된 샘플에 대한 상세 결과 저장 및 시각화
+    for i, sample_data in enumerate(worst_5_samples):
+        error = sample_data['error']
+        original_idx = sample_data['index_in_dataset']
+        shape_file = sample_data['shape_file']
+        landmark_file = sample_data['landmark_file']
+        points = sample_data['points'] # Keep as torch.Tensor for predict_landmarks
+        true_landmarks = sample_data['true_landmarks']
+        pred_landmarks = sample_data['predicted_landmarks']
+        landmark_errors = sample_data['landmark_errors']
+        
+        # 히트맵을 다시 예측하여 저장 (앞서 _로 버렸기 때문에)
+        _, pred_heatmap = predict_landmarks(model, points, device)
+
+        # 결과 출력
+        print(f"\nRank {i+1} (Original Index: {original_idx}):")
+        print(f"Shape file: {os.path.basename(shape_file)}")
+        print(f"Landmark file: {os.path.basename(landmark_file)}")
+        print(f"Number of points: {len(points)}")
+        print(f"Number of landmarks: {len(pred_landmarks)}")
+        
+        print("\nLandmark-wise errors (mm):")
+        for l in range(len(landmark_errors)):
+            print(f"Landmark {l+1}: {landmark_errors[l]:.4f} mm")
+        
+        print(f"\nAverage landmark error: {error:.4f} mm")
+        print(f"Max error: {np.max(landmark_errors):.4f} mm")
+        print(f"Min error: {np.min(landmark_errors):.4f} mm")
+        
+        # 히트맵 시각화 및 저장
+        heatmap_path = f'./results/heatmaps/worst_sample_{i+1}_heatmap.png'
+        visualize_heatmap(points.numpy(), pred_heatmap, heatmap_path)
+        print(f"Saved heatmap visualization to {heatmap_path}")
+        
+        # 결과 저장
+        result_dict = {
+            'shape_file': os.path.basename(shape_file),
+            'landmark_file': os.path.basename(landmark_file),
+            'points': points.numpy(),
+            'true_landmarks': true_landmarks.numpy(),
+            'predicted_landmarks': pred_landmarks,
+            'heatmap': pred_heatmap,
+            'error': error,
+            'landmark_errors': landmark_errors
+        }
+        
+        # npy 파일로 저장
+        save_path = f'./results/worst_sample_{i+1}_results.npy'
+        np.save(save_path, result_dict)
+        print(f"Saved results to {save_path}")
+
+if __name__ == "__main__":
+    main() 
