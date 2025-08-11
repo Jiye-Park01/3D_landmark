@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from My_args import *
-from PAConv_model import PAConv
+from PointTransformer_model import PointTransformerLandmark
 from dataset import FaceLandmarkData
 from augmentations import normalize_data
 import os
@@ -10,22 +10,25 @@ from mpl_toolkits.mplot3d import Axes3D
 import torch.nn.functional as F
 
 def load_model(model_path, device):
-    # 모델 초기화
     args = parser.parse_args()
-    model = PAConv(args, 57).to(device)  # 57 landmarks
-    
-    # 학습된 가중치 로드
-    state_dict = torch.load(model_path)
-    # DataParallel로 저장된 모델의 경우 'module.' 접두사 제거
+    model = PointTransformerLandmark(args, 68).to(device)
+    checkpoint = torch.load(model_path, map_location=device)
+    # state_dict 추출
+    if 'state_dict' in checkpoint:
+        state_dict = checkpoint['state_dict']
+    elif 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
+    else:
+        state_dict = checkpoint
+    # DataParallel로 저장된 경우 'module.' 제거
     new_state_dict = {}
     for k, v in state_dict.items():
         if k.startswith('module.'):
-            new_state_dict[k[7:]] = v  # 'module.' 제거
+            new_state_dict[k[7:]] = v
         else:
             new_state_dict[k] = v
-    
-    model.load_state_dict(new_state_dict)
-    model.eval()  # 평가 모드로 설정
+    model.load_state_dict(new_state_dict, strict=False)
+    model.eval()
     return model
 
 def predict_landmarks(model, points, device):
@@ -120,7 +123,8 @@ def main():
     print(f"Using device: {device}")
     
     # 모델 로드
-    model_path = './checkpoints/Face alignment with PAConv/custom/models/best_model.t7'
+    # model_path = './checkpoints/Face alignment with PAConv/custom/models/best_model.t7'
+    model_path = '../3D_pointtransformer/autoencoder_pointTransformer/pointtransformer_autoencoder/model/model_best.pth'
     if not os.path.exists(model_path):
         print(f"Error: Model file not found at {model_path}")
         return
@@ -173,6 +177,11 @@ def main():
         heatmap_path = f'./results/heatmaps/sample_{i+1}_heatmap.png'
         visualize_heatmap(points.numpy(), pred_heatmap, heatmap_path)
         print(f"Saved heatmap visualization to {heatmap_path}")
+
+        # 3D 결과 시각화 및 저장
+        result_img_path = f'./results/sample_{i+1}_result.png'
+        visualize_results(points.numpy(), true_landmarks.numpy(), pred_landmarks, save_path=result_img_path)
+        print(f"Saved 3D result visualization to {result_img_path}")
         
         # 결과 저장
         result_dict = {

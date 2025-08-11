@@ -1,0 +1,72 @@
+Stage 2 Full Dataset Evaluation Results
+=====================================
+Model: ./checkpoints/best_model_stage2.t7
+Data: ./data
+Evaluation time: 0:00:28.303355
+Total samples evaluated: 1871
+Batch size: 8
+
+Metrics:
+Average Heatmap Loss: 0.00984968
+Average Regression Loss: 0.23190858
+Average Landmark Error: 0.72972593
+Average NME: 0.08003462
+
+==================================================
+TOP 5 BEST PERFORMING SAMPLES (lowest NME)
+==================================================
+
+Rank 1:
+  Sample Index: 501
+  Batch Index: 62
+  Batch Position: 5
+  Landmark Error: 0.237760
+  NME: 0.029513
+  Person ID: 5135F
+  Expression: I
+  PC File: 5135F_FC_I_pc.npy
+  Landmark File: 5135F_FC_I.npy
+
+Rank 2:
+  Sample Index: 381
+  Batch Index: 47
+  Batch Position: 5
+  Landmark Error: 0.273185
+  NME: 0.032366
+  Person ID: 5130F
+  Expression: S
+  PC File: 5130F_FC_S_pc.npy
+  Landmark File: 5130F_FC_S.npy
+
+Rank 3:
+  Sample Index: 805
+  Batch Index: 100
+  Batch Position: 5
+  Landmark Error: 0.281617
+  NME: 0.035021
+  Person ID: 5152F
+  Expression: A
+  PC File: 5152F_FC_A_pc.npy
+  Landmark File: 5152F_FC_A.npy
+
+Rank 4:
+  Sample Index: 998
+  Batch Index: 124
+  Batch Position: 6
+  Landmark Error: 0.307547
+  NME: 0.035297
+  Person ID: 5162F
+  Expression: L
+  PC File: 5162F_FC_L_pc.npy
+  Landmark File: 5162F_FC_L.npy
+
+Rank 5:
+  Sample Index: 1235
+  Batch Index: 154
+  Batch Position: 3
+  Landmark Error: 0.306668
+  NME: 0.035638
+  Person ID: 5176F
+  Expression: O
+  PC File: 5176F_FC_O_pc.npy
+  Landmark File: 5176F_FC_O.npy

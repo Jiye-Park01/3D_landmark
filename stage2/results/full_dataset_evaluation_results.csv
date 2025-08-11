@@ -1,0 +1,6 @@
+Metric,Value
+Total_Samples,1871
+Heatmap_Loss,0.00984968
+Regression_Loss,0.23190858
+Landmark_Error,0.72972593
+NME,0.08003462

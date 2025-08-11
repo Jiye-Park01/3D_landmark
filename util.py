@@ -17,7 +17,26 @@ from sklearn.metrics import auc
 from sklearn.manifold import MDS
 from sklearn.neighbors import NearestNeighbors
 
+from PointTransformer_model import PointTransformerLandmark
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def load_model(model_path, device, args):
+    model = PointTransformerLandmark(args, args.num_landmarks).to(device)
+    
+    checkpoint = torch.load(model_path, map_location=device)
+    
+    # Check if the loaded checkpoint is a dictionary containing 'model_state_dict'
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        print("Loaded model state_dict from full checkpoint.")
+    else:
+        # Assume it's an old format checkpoint directly containing the model state_dict
+        model.load_state_dict(checkpoint, strict=False)
+        print("Loaded model state_dict from old format checkpoint.")
+        
+    model.eval()
+    return model
 
 def load_shape_data(dataset):
     if dataset == 'BU-3DFE':
@@ -73,6 +92,35 @@ def load_landmark_position(dataset):
 def load_Heatmap_data():
     Heat_data_all = np.load('Heat_data_all.npy', allow_pickle=True)
     return Heat_data_all
+
+
+def predict_landmarks(model, points, device):
+    model.eval()
+    with torch.no_grad():
+        # Shape 보정
+        if points.ndim == 2:
+            points = points.unsqueeze(0)
+        elif points.ndim == 3 and points.shape[1] == 3:
+            points = points.transpose(1, 2)
+
+        points = points.to(device)  # (B, N, 3)
+        pred_heatmap = model(points)  # (B, L, N)
+        pred_coords = heatmap_to_coordinates(pred_heatmap, points)
+    return pred_coords
+
+
+def heatmap_to_coordinates(heatmap, points):
+    # heatmap: (B, L, N), points: (B, N, 3)
+    B, L, N = heatmap.shape
+    coords = []
+    for b in range(B):
+        landmarks = []
+        for l in range(L):
+            idx = torch.argmax(heatmap[b, l])
+            landmarks.append(points[b, idx])
+        coords.append(torch.stack(landmarks))  # (L, 3)
+    return torch.stack(coords)  # (B, L, 3)
+
 
 
 def calculateHeatMap_Euclidean(shape_all, landmark_position_select_all, sigma):
@@ -178,51 +226,44 @@ def My_MDS(D, d=2):
     X = np.dot(topd_eigVec, np.sqrt(np.diag(eigVal[:-d-1:-1])))
     return X
 
-def landmark_regression(shape, Heatmap, regression_point_num):
+def landmark_regression(shape, Heatmap, regression_point_num=10, device=None):
     """
-    :params: shape [num_point, dims]
-    :params: Heatmap [num_point, landmarks]
-    :return: landmark3D [num_point, landmarks, 3]
+    shape: (N, 3) torch tensor
+    Heatmap: (N, L) torch tensor
+    return: (1, L, 3) torch tensor
     """
-    shape = shape.cpu().numpy()
-    Heatmap = Heatmap.cpu().numpy()
-    Heatmap_sort = np.sort(Heatmap, 0)
-    sortIdx = np.argsort(Heatmap, 0)
-    ### Select r points with maximum values on each heatmap ###
-    shape_sort_select = np.array([shape[sortIdx[-regression_point_num:, ld]] for ld in range(Heatmap.shape[1])]) 
-    Heatmap_sort_select = np.array([Heatmap[sortIdx[-regression_point_num:, ld], ld] for ld in range(Heatmap.shape[1])]).reshape(-1, regression_point_num, 1) 
+    N, L = Heatmap.shape
+    if device is None:
+        device = shape.device
 
-    shape_sort_select_rep = np.expand_dims(shape_sort_select, axis=-1).repeat(regression_point_num, axis=-1) 
-    shape2_exp_eer = shape_sort_select_rep.transpose(0, 1, 3, 2) - shape_sort_select_rep.transpose(0, 3, 1, 2)
-    ### Compute the distance matrix ###
-    D_Matrix = np.linalg.norm(shape2_exp_eer, axis=3)
-    Heatmap_weight = Heatmap_sort_select.repeat(regression_point_num, axis=-1)
-    Distance_matrix = D_Matrix
-    ### Apply MDS to D_Matrix to obtain a dimension-degraded version of local shape ###
-    mds = MDS(n_components=2, dissimilarity='precomputed')
-    shape_MDS = np.array([mds.fit_transform(Distance_matrix[i]) for i in range(Heatmap.shape[1])])
-    shape_MDS = np.concatenate((shape_MDS, np.zeros((Heatmap.shape[1], regression_point_num, 1))), axis=2) 
-    landmark2D = np.sum(Heatmap_sort_select.repeat(3, axis=2) * shape_MDS, axis=1) / Heatmap_sort_select.sum(1)
-    N = 6
-    neigh = NearestNeighbors(n_neighbors=N)
-    IDX = []
-    for i in range(Heatmap.shape[1]):
-        neigh.fit(shape_MDS[i])
-        IDX_ = neigh.kneighbors(landmark2D[i].reshape(1,-1))[1]
-        IDX.append(IDX_)
-    IDX = np.array(IDX)
+    # 1. 각 랜드마크별로 heatmap 값이 큰 r개 포인트 선택
+    topk_vals, topk_idx = torch.topk(Heatmap, regression_point_num, dim=0)  # (r, L)
+    # shape_sort_select: (L, r, 3)
+    shape_sort_select = shape[topk_idx]  # (r, L, 3)
+    shape_sort_select = shape_sort_select.permute(1, 0, 2)  # (L, r, 3)
+    Heatmap_sort_select = topk_vals.permute(1, 0).unsqueeze(-1)  # (L, r, 1)
 
-    shape_ext = np.array([shape_MDS[i, IDX[i], :].reshape(-1,3) - landmark2D[i].reshape(1,-1).repeat(N, axis=0) for i in range(Heatmap.shape[1])])
-    shape_ext_T = np.array([shape_sort_select[i, IDX[i], :] for i in range(Heatmap.shape[1])]).reshape(-1,N,3)
-    ### shape Centralization and Scale uniformization ###
-    w1 = shape_ext - np.repeat(shape_ext.mean(1, keepdims=True), N, axis=1)    
-    w2 = shape_ext_T - np.repeat(shape_ext_T.mean(1, keepdims=True), N, axis=1)   
-    w1 = np.linalg.norm(w1.reshape(Heatmap.shape[1], -1), axis=1).reshape(-1, 1, 1)  
-    w2 = np.linalg.norm(w2.reshape(Heatmap.shape[1], -1), axis=1).reshape(-1, 1, 1)  
-    shape_ext = shape_ext * w2 / w1  
-    ### Get the 3D landmark coordinates after registration ###
-    landmark3D = np.array([get_rigid(shape_ext[i], shape_ext_T[i])[:, 3] for i in range(Heatmap.shape[1])])
-    return torch.from_numpy(landmark3D).unsqueeze(0).to(device)
+    # 2. 거리 행렬 계산 (L, r, r)
+    diff = shape_sort_select.unsqueeze(2) - shape_sort_select.unsqueeze(1)  # (L, r, r, 3)
+    D_Matrix = torch.norm(diff, dim=-1)  # (L, r, r)
+
+    # 3. MDS 근사 unfolding (고전적 MDS: 중심화 + SVD)
+    # 중심화
+    J = torch.eye(regression_point_num, device=device) - 1.0 / regression_point_num
+    J = J.unsqueeze(0).expand(L, -1, -1)  # (L, r, r)
+    B = -0.5 * J @ (D_Matrix ** 2) @ J  # (L, r, r)
+    # SVD로 2D 좌표 추출
+    U, S, V = torch.linalg.svd(B)
+    shape_MDS = U[:, :, :2] * S[:, :2].sqrt().unsqueeze(1)  # (L, r, 2)
+    # 3D로 확장 (z=0)
+    shape_MDS = torch.cat([shape_MDS, torch.zeros(L, regression_point_num, 1, device=device)], dim=2)  # (L, r, 3)
+
+    # 4. weighted 평균 (unfolded landmark 좌표)
+    weights = Heatmap_sort_select / (Heatmap_sort_select.sum(1, keepdim=True) + 1e-8)  # (L, r, 1)
+    landmark2D = (weights * shape_MDS).sum(1)  # (L, 3)
+
+    # 5. 반환 shape 맞추기
+    return landmark2D.unsqueeze(0)  # (1, L, 3)
 
 def get_rigid(src, dst):
     src_mean = src.mean(0)

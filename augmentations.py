@@ -20,14 +20,14 @@ def normalize_data(batch_data, landmarks_data=None):
     B, N, C = batch_data.shape
     centroid = torch.mean(batch_data, axis=1)
     batch_data = batch_data - centroid.unsqueeze(1).repeat(1, N, 1)
-    m = torch.max(torch.sqrt(torch.sum(batch_data ** 2, axis=2)),axis=1)[0]
-    batch_data = batch_data / m.view(-1, 1, 1)
+    # 스케일링 제거: m = torch.max(torch.sqrt(torch.sum(batch_data ** 2, axis=2)),axis=1)[0]
+    # 스케일링 제거: batch_data = batch_data / m.view(-1, 1, 1)
 
     if landmarks_data is not None:
-        # Apply the same transformation to landmarks
+        # Apply the same transformation to landmarks (중심 이동만)
         L = landmarks_data.shape[1]
         landmarks_data = landmarks_data - centroid.unsqueeze(1).repeat(1, L, 1)
-        landmarks_data = landmarks_data / m.view(-1, 1, 1)
+        # 스케일링 제거: landmarks_data = landmarks_data / m.view(-1, 1, 1)
         return batch_data, landmarks_data
 
     return batch_data

@@ -10,6 +10,7 @@ results_1/
 inference2.py
 train2.py
 PAConv/
+PointTransformer/
 
 .idea/workspace.xml
 part_seg/.DS_Store

@@ -1,0 +1,17 @@
+Stage 2 Full Dataset Evaluation Results
+=====================================
+Total samples evaluated: 1871
+Average Coarse Error: 0.471377
+Average Refined Error: 0.074074
+Average Coarse NME: 0.757526
+Average Refined NME: 0.119056
+Improvement: 84.29%
+
+################################################
+=== Full Dataset Evaluation ===
+Evaluating full dataset with 1871 samples...
+/home/jhrew/jiye/3D_pointtransformer/lib/pointops/functions/pointops.py:42: UserWarning: The torch.cuda.*DtypeTensor constructors are no longer recommended. It's best to use methods such as torch.tensor(data, dtype=*, device='cuda') to create tensors. (Triggered internally at /opt/conda/conda-bld/pytorch_1729647350383/work/torch/csrc/tensor/python_tensor.cpp:78.)
+  idx = torch.cuda.IntTensor(m, nsample).zero_()
+Processed 0/1871 samples...
+Processed 800/1871 samples...
+Processed 1600/1871 samples...

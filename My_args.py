@@ -21,9 +21,9 @@ parser.add_argument('--workers', type=int, default=4, help='number of data loadi
 
 # train args
 parser.add_argument('--eval', type=bool, default=False, help='evaluate the model')
-parser.add_argument('--batch_size', type=int, default=16, metavar='batch_size', help='Size of batch)')
+parser.add_argument('--batch_size', type=int, default=128, metavar='batch_size', help='Size of batch)')
 parser.add_argument('--test_batch_size', type=int, default=16, metavar='batch_size', help='Size of batch)')
-parser.add_argument('--epochs', type=int, default=250, metavar='N', help='number of episode to train')
+parser.add_argument('--epochs', type=int, default=600, metavar='N', help='number of episode to train')
 parser.add_argument('--dropout', type=float, default=0.3, help='dropout rate')
 
 # optimizor args
@@ -39,7 +39,7 @@ parser.add_argument('--grad_clip', type=float, default=1.0, help='gradient clipp
 parser.add_argument('--max_threshold', default=10, type=float, help='the maximum threshold of error_rate')
 parser.add_argument('--seed', type=int, default=10, metavar='S', help='random seed (default: 1)')
 parser.add_argument('--dataset_seed', type=int, default=1, metavar='S', help='train/test dataset random seed (default: 1)')
-parser.add_argument('--sigma', type=float, default=10, metavar='Sig', help='Gaussian Variance of heatmap')
+parser.add_argument('--sigma', type=float, default=5.0, metavar='Sig', help='Gaussian Variance of heatmap')
 parser.add_argument('--emb_dims', type=int, default=1024, metavar='N', help='Dimension of embeddings')
 parser.add_argument('--k', type=int, default=30, metavar='N', help='Num of nearest neighbors to use in PAConv')
 
@@ -48,9 +48,16 @@ parser.add_argument('--calc_scores', type=str, default='softmax', metavar='cs', 
 parser.add_argument('--hidden', type=list, default=[[16], [16], [16], [16]], help='the hidden layers of ScoreNet')
 parser.add_argument('--num_matrices', type=list, default=[8, 8, 8, 8], help='the number of weight banks')
 
+# Point Transformer args
+parser.add_argument('--pretrained_path', type=str, default='/home/jhrew/jiye/3D_pointtransformer/autoencoder_pointTransformer/pointtransformer_autoencoder/model/model_best.pth', help='Path to pretrained Point Transformer weights')
+parser.add_argument('--freeze_epochs', type=int, default=10, help='Number of epochs to freeze backbone')
+parser.add_argument('--unfreeze_epoch', type=int, default=10, help='Epoch to start unfreezing backbone')
+
 # Add num_points and num_landmarks arguments
 parser.add_argument('--num_points', type=int, default=2048, help='Number of points to sample from each shape')
-parser.add_argument('--num_landmarks', type=int, default=56, help='Number of landmarks')
+parser.add_argument('--num_landmarks', type=int, default=68, help='Number of landmarks')
+parser.add_argument('--landmark_range_penalty_weight', type=float, default=0.01, help='Weight for landmark range penalty')
+parser.add_argument('--position_loss_weight', type=float, default=0.3, help='Weight for position loss')
 
 # CUDA argument
 parser.add_argument('--cuda', action='store_true', help='enable CUDA training')

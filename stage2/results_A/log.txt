@@ -1,0 +1,61 @@
+(face39) jhrew@cs-server:~/jiye/3D_landmark/stage2$ python inference_stage2.py     --model_path ./checkpoints/best_model_stage2.t7     --data_dir ./data     --num_samples 5     --output_dir ./results
+Using device: cuda
+Stage 2 test dataset: 75 samples
+Total data pairs found: 373
+Backbone encoder frozen
+/home/jhrew/jiye/3D_landmark/stage2/inference_stage2.py:37: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(model_path, map_location=device)
+Loaded Stage 2 model with 68 landmarks
+Found expression A: 5111F_FC_A_landmarks.npy
+
+Selected 5 samples with different expressions: ['A']
+
+Processing sample 1/5
+  Person ID: 5111F
+  Expression: A
+  Point Cloud: 5111F_FC_A_pc.npy
+  Landmark: 5111F_FC_A_landmarks.npy
+/home/jhrew/jiye/3D_pointtransformer/lib/pointops/functions/pointops.py:42: UserWarning: The torch.cuda.*DtypeTensor constructors are no longer recommended. It's best to use methods such as torch.tensor(data, dtype=*, device='cuda') to create tensors. (Triggered internally at /opt/conda/conda-bld/pytorch_1729647350383/work/torch/csrc/tensor/python_tensor.cpp:78.)
+  idx = torch.cuda.IntTensor(m, nsample).zero_()
+Sample 1 (5111F_A) - Coarse Error: 0.4923, Refined Error: 0.1208
+Sample 1 (5111F_A) - Coarse NME: 0.7547, Refined NME: 0.1852
+
+Processing sample 2/5
+  Person ID: 5113F
+  Expression: A
+  Point Cloud: 5113F_FC_A_pc.npy
+  Landmark: 5113F_FC_A_landmarks.npy
+Sample 2 (5113F_A) - Coarse Error: 0.4871, Refined Error: 0.0649
+Sample 2 (5113F_A) - Coarse NME: 0.7802, Refined NME: 0.1039
+
+Processing sample 3/5
+  Person ID: 5114F
+  Expression: A
+  Point Cloud: 5114F_FC_A_pc.npy
+  Landmark: 5114F_FC_A_landmarks.npy
+Sample 3 (5114F_A) - Coarse Error: 0.4759, Refined Error: 0.1067
+Sample 3 (5114F_A) - Coarse NME: 0.7197, Refined NME: 0.1613
+
+Processing sample 4/5
+  Person ID: 5115F
+  Expression: A
+  Point Cloud: 5115F_FC_A_pc.npy
+  Landmark: 5115F_FC_A_landmarks.npy
+Sample 4 (5115F_A) - Coarse Error: 0.4771, Refined Error: 0.0650
+Sample 4 (5115F_A) - Coarse NME: 0.7387, Refined NME: 0.1006
+
+Processing sample 5/5
+  Person ID: 5117F
+  Expression: A
+  Point Cloud: 5117F_FC_A_pc.npy
+  Landmark: 5117F_FC_A_landmarks.npy
+Sample 5 (5117F_A) - Coarse Error: 0.4502, Refined Error: 0.0904
+Sample 5 (5117F_A) - Coarse NME: 0.7069, Refined NME: 0.1419
+
+=== Stage 2 Evaluation Results ===
+Tested expressions: ['A']
+Average Coarse Error: 0.4765
+Average Refined Error: 0.0895
+Average Coarse NME: 0.7400
+Average Refined NME: 0.1386
+Improvement: 81.21%
